@@ -1,0 +1,3 @@
+Set-AzContext -Subscription '00000000-0000-0000-0000-000000000000'
+
+New-AzResourceGroupDeployment -Name WAFPolicy -ResourceGroupName rg-room-booking -TemplateFile .\WAPFirewall.json

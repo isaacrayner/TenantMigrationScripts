@@ -1,0 +1,41 @@
+#!/bin/bash
+
+# Set variables
+SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+INPUT_FILE="/mnt/c/temp/AzureStorageBackupSettingsBackup/storage-backup.csv"
+
+az account set --subscription "$SUBSCRIPTION_ID"
+
+# Check if CSV file exists
+if [[ ! -f "$INPUT_FILE" ]]; then
+    echo "❌ ERROR: CSV file $INPUT_FILE not found. Run the backup export script first!"
+    exit 1
+fi
+
+echo "🔹 Starting the process to restore Azure File Share backups..."
+
+# Read CSV file line by line, skipping the header
+tail -n +2 "$INPUT_FILE" | while IFS=',' read -r STORAGE_ACCOUNT FILE_SHARE FRIENDLY_NAME RESOURCE_ID VAULT POLICY_NAME POLICY_ID; do
+    echo "🔍 Restoring Backup for Storage Account: $STORAGE_ACCOUNT, File Share: $FRIENDLY_NAME in Vault: $VAULT"
+
+    # Extract Resource Group Name from ResourceId
+    RESOURCE_GROUP=$(echo "$RESOURCE_ID" | awk -F'/' '{print $5}')
+
+    # Get the backup policy in the vault
+    POLICY=$(az backup policy list --vault-name "$VAULT" --resource-group "$RESOURCE_GROUP" \
+        --query "[?name=='$POLICY_NAME']" -o json 2>/dev/null)
+
+    # Check if policy exists
+    if [[ -z "$POLICY" || "$POLICY" == "[]" ]]; then
+        echo "⚠ WARNING: Policy $POLICY_NAME not found in Vault: $VAULT. Skipping..."
+        continue
+    fi
+
+    # Re-enable backup for the File Share
+    az backup protection enable-for-azurefileshare --vault-name "$VAULT" --resource-group "$RESOURCE_GROUP" \
+        --policy-name "$POLICY_NAME" --storage-account "$STORAGE_ACCOUNT" --file-share "$FRIENDLY_NAME"
+
+    echo "✅ Backup re-enabled for File Share: $FRIENDLY_NAME in Storage Account: $STORAGE_ACCOUNT"
+done
+
+echo "🔹 Backup restore process complete."

@@ -1,0 +1,16 @@
+# Backup all Private Endpoints in the subscription
+# Set these variables before running the script
+
+az account set --subscription "00000000-0000-0000-0000-000000000000"
+
+mkdir -p /mnt/c/temp/AzurePrivateEndpointsBackup
+
+for pe in $(az network private-endpoint list --query "[].id" -o tsv); do
+    name=$(az network private-endpoint show --ids $pe --query "name" -o tsv)
+    rg=$(az network private-endpoint show --ids $pe --query "resourceGroup" -o tsv)
+    
+    az network private-endpoint show --ids $pe -o json > "/mnt/c/temp/AzurePrivateEndpointsBackup/${name}_PrivateEndpoint.json"
+    echo "Backup saved for Private Endpoint: $name"
+done
+
+echo "Backup completed!"

@@ -1,0 +1,22 @@
+#https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/move-limitations/app-service-move-limitations
+
+1. Delete Binding on the Cutom Domain
+NOTE:Please delete any existing SSL binding with the certificate before move operation.
+From the portal, select "TLS/SSL settings" from the left navigation of your app > click on "Bindings" tab > Right click on the target binding from the "TLS/SSL bindings" list and 
+click "Delete" from the context menu
+
+2. Delete the certificates
+3. Delete the managed certificates
+
+
+
+Migrate App Services:
+App S Environments: not possible
+Move App S to original RGs
+Move all dependent App Servce resources into the same RG
+delete certs
+remove bindings
+move sub
+Move back to RGs
+Restore certs
+restore binding

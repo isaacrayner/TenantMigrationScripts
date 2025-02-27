@@ -1,0 +1,15 @@
+# Delete Private Endpoints in the subscription
+# Set these variables before running the script
+
+az account set --subscription "00000000-0000-0000-0000-000000000000"
+
+for pe in $(az network private-endpoint list --query "[].id" -o tsv); do
+    name=$(az network private-endpoint show --ids $pe --query "name" -o tsv)
+    rg=$(az network private-endpoint show --ids $pe --query "resourceGroup" -o tsv)
+    
+    echo "Deleting Private Endpoint: $name"
+    az network private-endpoint delete --name $name --resource-group $rg
+    echo "Deleted Private Endpoint: $name"
+done
+
+echo "All Private Endpoints deleted."

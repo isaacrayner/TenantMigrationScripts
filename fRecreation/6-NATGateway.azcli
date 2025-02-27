@@ -1,0 +1,40 @@
+#!/bin/bash
+
+
+# Set variables
+SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+
+# Ensure Azure CLI is logged in
+az account set --subscription "$SUBSCRIPTION_ID"
+
+# Set backup directory
+BACKUP_DIR="/mnt/c/temp/AzureNATGatewayBackup"
+
+# Load subnet backup data
+SUBNETS_JSON="$BACKUP_DIR/subnets.json"
+
+echo "Reattaching NAT Gateways to subnets..."
+
+# Loop through subnets and reattach NAT Gateways
+jq -c '.[]' $SUBNETS_JSON | while read -r subnet; do
+    SUBNET_NAME=$(echo $subnet | jq -r '.name')
+    RG=$(echo $subnet | jq -r '.resourceGroup')
+    VNET_NAME=$(echo $subnet | jq -r '.id' | awk -F'/' '{print $(NF-3)}')  # Extract VNet name from ID
+    NAT_GATEWAY_ID=$(echo $subnet | jq -r '.natGateway.id')
+
+    if [ "$NAT_GATEWAY_ID" != "null" ]; then
+        NAT_GATEWAY_NAME=$(basename $NAT_GATEWAY_ID)
+
+        echo "Reattaching NAT Gateway: $NAT_GATEWAY_NAME to Subnet: $SUBNET_NAME in RG: $RG"
+        
+        az network vnet subnet update \
+            --name $SUBNET_NAME \
+            --vnet-name $VNET_NAME \
+            --resource-group $RG \
+            --nat-gateway $NAT_GATEWAY_NAME
+    else
+        echo "Skipping subnet: $SUBNET_NAME as it had no NAT Gateway originally."
+    fi
+done
+
+echo "NAT Gateway reattachment completed!"

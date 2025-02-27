@@ -1,0 +1,4 @@
+### Now you must go through the Key Vault and add the access policies back in for the managed identities
+### associated with the resources that need access to the Key Vault. See the spreadsheet for details.
+### This will be for the App Registrations and the User Identities for now (RBAC and Access Policies)
+### After recreating all the MI's, you will need to update the Key Vault access policies to allow the new MI's access to the Key Vault as well

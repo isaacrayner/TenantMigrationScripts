@@ -1,0 +1,3 @@
+https://learn.microsoft.com/en-us/azure/backup/backup-azure-move-recovery-services-vault?toc=%2Fazure%2Fazure-resource-manager%2Fmanagement%2Ftoc.json
+
+You have to move each RSV manually to the new sub.

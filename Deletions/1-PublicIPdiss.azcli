@@ -1,0 +1,63 @@
+#!/bin/bash
+# what does this script to? Disassociates public IPs from VMs in the old subscription.
+# Set these variables before running the script
+
+# Variables (Update these)
+OLD_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+NEW_SUBSCRIPTION_ID="<DestinationSubscriptionID>"
+TEMP_FILE="/mnt/c/temp/public_ips.json"
+#!/bin/bash
+
+# Login and set old subscription
+echo "Logging into old subscription..."
+#az login --only-show-errors > /dev/null
+az account set --subscription $OLD_SUBSCRIPTION_ID
+
+# Get all Resource Groups
+RESOURCE_GROUPS=$(az group list --subscription $OLD_SUBSCRIPTION_ID --query "[].name" -o json)
+
+if [[ -z "$RESOURCE_GROUPS" || "$RESOURCE_GROUPS" == "[]" ]]; then
+    echo "No Resource Groups found in the old subscription."
+    exit 1
+fi
+
+# Loop through each RG and find VMs with Public IPs
+echo "Fetching Public IPs from all VMs in all Resource Groups..."
+> $TEMP_FILE  # Clear or create the temp file
+
+for RG in $(echo "$RESOURCE_GROUPS" | jq -r '.[]'); do
+    echo "Checking Resource Group: $RG"
+    
+    VMS=$(az vm list -g "$RG" --subscription $OLD_SUBSCRIPTION_ID --query "[].name" -o json)
+    if [[ -z "$VMS" || "$VMS" == "[]" ]]; then
+        echo "  No VMs found in $RG."
+        continue
+    fi
+
+    for VM in $(echo "$VMS" | jq -r '.[]'); do
+        PUBLIC_IP_ID=$(az vm list-ip-addresses --name "$VM" --resource-group "$RG" --subscription $OLD_SUBSCRIPTION_ID --query "[].virtualMachine.network.publicIpAddresses[0].id" -o tsv)
+
+        if [[ -z "$PUBLIC_IP_ID" ]]; then
+            echo "  No public IP for VM: $VM, skipping..."
+            continue
+        fi
+
+        PUBLIC_IP_NAME=$(basename "$PUBLIC_IP_ID")  # Extract the Public IP Name
+        NIC_ID=$(az vm show -g "$RG" -n "$VM" --query "networkProfile.networkInterfaces[0].id" -o tsv)
+        NIC_NAME=$(basename "$NIC_ID")
+
+        # Store details for reattachment
+        echo "{\"VM\":\"$VM\", \"PublicIPName\":\"$PUBLIC_IP_NAME\", \"ResourceGroup\":\"$RG\"}" >> $TEMP_FILE
+
+        # Disassociate Public IP
+        echo "  Disassociating Public IP from VM: $VM in $RG..."
+        az network nic ip-config update --name ipconfig1 --nic-name "$NIC_NAME" --resource-group "$RG" --remove publicIpAddress --only-show-errors
+    done
+done
+
+echo "All Public IPs disassociated. Proceed with VM migration."
+
+# Step 4: Pause for VM Migration (Manual Step)
+echo ">>> Perform VM migration now (Azure Site Recovery / Move VMs manually)."
+echo ">>> Ensure Public IPs are migrated to the same RG in the destination."
+echo ">>> After migration, rerun this script with --reattach to restore Public IPs."

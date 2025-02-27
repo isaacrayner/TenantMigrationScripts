@@ -1,0 +1,30 @@
+
+az account set --subscription "00000000-0000-0000-0000-000000000000"
+
+# Set backup file path
+BACKUP_DIR="/mnt/c/temp/AzurePrivateEndpointsBackup/"
+
+# Loop through all JSON files in /mnt/c/temp/
+for file in "$BACKUP_DIR"*.json; do
+    name=$(jq -r '.name' "$file")
+    rg=$(jq -r '.resourceGroup' "$file")
+    location=$(jq -r '.location' "$file")
+    subnet_id=$(jq -r '.subnet.id' "$file")
+    private_link_service_id=$(jq -r '.privateLinkServiceConnections[0].privateLinkServiceId' "$file")
+    group_ids=$(jq -r '.privateLinkServiceConnections[0].groupIds | join(" ")' "$file")
+
+    echo "Recreating Private Endpoint: $name"
+
+    az network private-endpoint create \
+        --name "$name" \
+        --resource-group "$rg" \
+        --location "$location" \
+        --subnet "$subnet_id" \
+        --private-connection-resource-id "$private_link_service_id" \
+        --group-id "$group_ids" \
+        --connection-name "${name}-connection"
+
+    echo "Private Endpoint $name recreated."
+done
+
+echo "All Private Endpoints have been recreated!"

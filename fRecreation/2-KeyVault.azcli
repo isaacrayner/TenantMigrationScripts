@@ -1,0 +1,87 @@
+##Remember to recreate the Access Policies for the Key Vault after the Key Vault is recreated
+##Specifically, allow the Managed Identities access to the keyvault using access policies. See spreadsheet for details
+#Update the tenant ID associated with all existing key vaults in the subscription to the target directory.
+#Remove all existing access policy entries.
+#Add new access policy entries associated with the target directory.
+
+########SINGLE########
+az account set -s 00000000-0000-0000-0000-000000000000                                    # Select your Azure Subscription
+tenantId=$(az account show --query tenantId)                               # Get your tenantId
+az keyvault update -n myvault --remove Properties.accessPolicies           # Remove the access policies
+az keyvault update -n myvault --set Properties.tenantId=$tenantId          # Update the key vault tenantId
+
+
+########MANY########
+# Set Azure Subscription
+az account set -s 00000000-0000-0000-0000-000000000000
+
+# Get Tenant ID
+tenantId=$(az account show --query tenantId --output tsv)
+echo "Tenant ID: $tenantId"  # Display Tenant ID
+
+# Get all Key Vaults in the subscription
+keyVaults=$(az keyvault list --query "[].{name:name, rg:resourceGroup}" --output json)
+
+# Display Key Vaults on screen
+echo "Key Vaults in the subscription:"
+echo "$keyVaults" | jq
+
+# Loop through each Key Vault
+for row in $(echo "${keyVaults}" | jq -c '.[]'); do
+    kvName=$(echo $row | jq -r '.name')
+    rgName=$(echo $row | jq -r '.rg')
+
+    echo "Processing Key Vault: $kvName in Resource Group: $rgName"
+
+    # Remove existing access policies
+    az keyvault update -n "$kvName" -g "$rgName" --remove properties.accessPolicies
+
+    # Update Key Vault tenant ID
+    az keyvault update -n "$kvName" -g "$rgName" --set properties.tenantId="$tenantId"
+
+    echo "Updated Key Vault: $kvName"
+done
+
+echo "All Key Vaults updated successfully."
+
+
+### Now you must go through the Key Vault and add the access policies back in for the managed identities
+### associated with the resources that need access to the Key Vault. See the spreadsheet for details.
+### This will be for the App Registrations and the User Identities for now (RBAC and Access Policies)
+### UPDATE THE RBAC RULES FOR THE USER_Assigned_IDENTITIES NOOOOOOOWWWWWWW
+### After recreating all the MI's, you will need to update the Key Vault access policies to allow the new MI's access to the Key Vault as well
+
+############RESTORE THE ACCESS POLICIES############
+
+# Set backup directory
+BACKUP_DIR="/mnt/c/temp/AzureKVAccessBackup"
+
+echo "Restoring Key Vault access policies..."
+
+# Loop through backed-up policies and restore them
+for POLICY_FILE in $BACKUP_DIR/*_access_policies.json; do
+    KV_NAME=$(basename $POLICY_FILE _access_policies.json)
+    echo "Restoring access policies for Key Vault: $KV_NAME"
+
+    # Read access policies from file
+    POLICIES=$(cat $POLICY_FILE)
+
+    # Loop through each policy and reapply it
+    echo "$POLICIES" | jq -c '.[]' | while read -r policy; do
+        OBJECT_ID=$(echo $policy | jq -r '.objectId')
+        PERMISSIONS_KEYS=$(echo $policy | jq -r '.permissions.keys[]?' | tr '\n' ' ')
+        PERMISSIONS_SECRETS=$(echo $policy | jq -r '.permissions.secrets[]?' | tr '\n' ' ')
+        PERMISSIONS_CERTS=$(echo $policy | jq -r '.permissions.certificates[]?' | tr '\n' ' ')
+
+        echo "Reapplying policy for Object ID: $OBJECT_ID on Key Vault: $KV_NAME"
+
+        az keyvault set-policy \
+            --name "$KV_NAME" \
+            --object-id "$OBJECT_ID" \
+            --key-permissions $PERMISSIONS_KEYS \
+            --secret-permissions $PERMISSIONS_SECRETS \
+            --certificate-permissions $PERMISSIONS_CERTS
+    done
+done
+
+echo "Key Vault access policies restored successfully!"

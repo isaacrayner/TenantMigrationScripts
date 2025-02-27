@@ -1,0 +1,60 @@
+****************
+* scripts 
+****************
+
+
+Query VM Disk Encryption:
+Resources
+| where type == "microsoft.compute/virtualmachines"
+| extend osDisk = properties.storageProfile.osDisk
+| project name, location, osType = osDisk.osType, diskEncryptionSetId = osDisk.managedDisk.diskEncryptionSet.id, encryptionSettings = osDisk.encryptionSettingsCollection
+
+Query Disk encryption status
+Resources
+| where type == "microsoft.compute/disks"
+| project name, location, encryption = properties.encryption
+
+
+****************
+* Notes 
+****************
+
+
+If the extension is BitLocker, then this should be disabled (reboot required) before performing the move operation.
+Note: consider using Azure managed disks with SSE rather than BitLocker as an extension on the VM.
+
+Types of Encryption and Migration Scenarios:
+Azure Server-Side Encryption (SSE) with Platform-Managed Keys (PMKs):
+
+Description: The disk is encrypted using keys managed by Azure.
+Migration: Fully supported. You can move encrypted disks across subscriptions, resource groups, or even regions without any additional steps.
+Steps:
+Use Azure Portal, CLI, or PowerShell to move the disk or VM.
+Azure Server-Side Encryption (SSE) with Customer-Managed Keys (CMKs):
+
+Description: The disk is encrypted using customer-managed keys stored in Azure Key Vault.
+Migration:
+Supported, but you must ensure the Key Vault is accessible in the target subscription/region.
+The target subscription/region must have access to the same Key Vault or the key must be replicated to a Key Vault in the target region.
+Steps:
+Verify Key Vault permissions in the target subscription/region.
+Move the disk using Azure Portal, CLI, or PowerShell.
+Azure Disk Encryption (ADE) with BitLocker or DM-Crypt:
+
+Description: The OS or data disk is encrypted using BitLocker (Windows) or DM-Crypt (Linux).
+Migration:
+Within the same subscription: Supported with some restrictions.
+Across subscriptions or regions: Generally not supported. You must disable encryption before migration.
+Steps (if required):
+Disable Azure Disk Encryption (this may require VM deallocation and decryption of the disk).
+Perform the move operation.
+Re-enable encryption after the move.
+BitLocker Managed via Extensions:
+
+Description: BitLocker is enabled as an extension on the VM.
+Migration:
+Not directly supported. The extension must be disabled before the move.
+Steps:
+Disable the BitLocker extension and reboot the VM.
+Perform the migration.
+Re-enable the extension after the move if required.

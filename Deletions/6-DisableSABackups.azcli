@@ -1,0 +1,44 @@
+#!/bin/bash
+
+# Set variables
+SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+INPUT_FILE="/mnt/c/temp/AzureStorageBackupSettingsBackup/storage-backup.csv"
+
+az account set --subscription "$SUBSCRIPTION_ID"
+
+echo "🔹 Starting the process to stop Azure File Share backups..."
+
+# Read CSV file line by line, skipping the header
+tail -n +2 "$INPUT_FILE" | while IFS=',' read -r STORAGE_ACCOUNT FILE_SHARE FRIENDLY_NAME RESOURCE_ID VAULT POLICY_NAME POLICY_ID; do
+    echo "🔍 Checking Backup for Storage Account: $STORAGE_ACCOUNT, File Share: $FRIENDLY_NAME in Vault: $VAULT"
+
+    # Extract Resource Group Name from ResourceId
+    RESOURCE_GROUP=$(echo "$RESOURCE_ID" | awk -F'/' '{print $5}')
+
+    # Get the backup item (Azure File Share) using FriendlyName
+    BACKUP_ITEM=$(az backup item list --vault-name "$VAULT" --resource-group "$RESOURCE_GROUP" \
+        --query "[?properties.friendlyName=='$FRIENDLY_NAME' && properties.workloadType=='AzureFileShare']" -o json 2>/dev/null)
+
+    # Check if backup item exists
+    if [[ -z "$BACKUP_ITEM" || "$BACKUP_ITEM" == "[]" ]]; then
+        echo "⚠ No backup found for File Share: $FRIENDLY_NAME in Vault: $VAULT. Skipping..."
+        continue
+    fi
+
+    # Extract Backup Item Name
+    BACKUP_ITEM_NAME=$(echo "$BACKUP_ITEM" | jq -r '.[0].name')
+
+    # Extract Container Name (Required for --container-name)
+    CONTAINER_NAME=$(echo "$BACKUP_ITEM" | jq -r '.[0].properties.containerName')
+
+    echo "⏸ Stopping Backup for File Share: $FRIENDLY_NAME in Storage Account: $STORAGE_ACCOUNT"
+
+    # Stop the backup WITHOUT deleting recovery points
+    az backup protection disable --vault-name "$VAULT" --resource-group "$RESOURCE_GROUP" \
+        --item-name "$BACKUP_ITEM_NAME" --container-name "$CONTAINER_NAME" --yes --retain-recovery-points true
+
+    echo "✅ Backup stopped for File Share: $FRIENDLY_NAME, but recovery points are retained."
+done
+
+echo "🔹 Backup stopping process complete."
+

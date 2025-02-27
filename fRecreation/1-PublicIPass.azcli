@@ -1,0 +1,42 @@
+#!/bin/bash
+
+# Variables (Update these)
+OLD_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+NEW_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+TEMP_FILE="/mnt/c/temp/public_ips.json"
+
+#!/bin/bash
+
+# Step 5: Switch to the new subscription
+echo "Logging into new subscription..."
+az account set --subscription $NEW_SUBSCRIPTION_ID
+
+# Step 6: Reattach Public IPs
+echo "Reattaching Public IPs to migrated VMs..."
+while IFS= read -r line; do
+    VM_NAME=$(echo "$line" | jq -r '.VM')
+    PUBLIC_IP_NAME=$(echo "$line" | jq -r '.PublicIPName')
+    RESOURCE_GROUP=$(echo "$line" | jq -r '.ResourceGroup')
+
+    if [[ -z "$PUBLIC_IP_NAME" ]]; then
+        echo "No public IP for VM: $VM_NAME, skipping..."
+        continue
+    fi
+
+    echo "  Finding existing Public IP in the destination subscription..."
+    PUBLIC_IP_ID=$(az network public-ip show --name "$PUBLIC_IP_NAME" --resource-group "$RESOURCE_GROUP" --query "id" -o tsv --subscription $NEW_SUBSCRIPTION_ID)
+
+    if [[ -z "$PUBLIC_IP_ID" ]]; then
+        echo "  ERROR: Public IP $PUBLIC_IP_NAME not found in $RESOURCE_GROUP. Ensure it was migrated."
+        continue
+    fi
+
+    echo "  Reattaching Public IP to VM: $VM_NAME in $RESOURCE_GROUP..."
+    NIC_ID=$(az vm show -g "$RESOURCE_GROUP" -n "$VM_NAME" --query "networkProfile.networkInterfaces[0].id" -o tsv)
+    NIC_NAME=$(basename "$NIC_ID")
+
+    az network nic ip-config update --name ipconfig1 --nic-name "$NIC_NAME" --resource-group "$RESOURCE_GROUP" --public-ip-address "$PUBLIC_IP_ID" --only-show-errors
+done < "$TEMP_FILE"
+
+echo "All Public IPs reattached successfully!"
+

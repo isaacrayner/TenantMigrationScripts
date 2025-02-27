@@ -1,0 +1,74 @@
+#https://learn.microsoft.com/en-us/azure/role-based-access-control/transfer-subscription#save-custom-roles
+az login
+
+# Run these commands if you have multiple subscriptions
+az account list --output table
+az account set --subscription <subscriptionID>
+
+#INSTALL Resource Graph Extension
+az extension list
+az extension add -n resource-graph
+az extension update --name resource-graph
+
+########################################################################################
+# Users and Identities
+########################################################################################
+
+#Save Role assignments, as everything is deleted
+az role assignment list --all --include-inherited --output json > roleassignments.json
+az role assignment list --all --include-inherited --output tsv > roleassignments.tsv
+az role assignment list --all --include-inherited --output table > roleassignments.txt
+
+#Review the Role Assignments, as some may not be needed anymore
+
+#Save Custom Roles
+# List the Roles
+az role definition list --custom-role-only true --output json --query '[].{roleName:roleName, roleType:roleType}'
+
+#Save each custom role that you will need in the target directory as a separate JSON file.
+az role definition list --name "AppGateway Health Probe Reader" > customrolename.json
+#Modify each copy to a specific format
+
+############################
+Users / groups / Service Principals
+<# Determine which users, groups and service principals we will need to map in the target directory #>
+Create these in the new directory
+
+############################
+Managed Identities
+SA MI: re-enable any system-assigned MIs
+UA MI: re-create and attach them in the target directory
+
+#Get list of System-Assigned and User-Assigned MIs
+az ad sp list --all --filter "servicePrincipalType eq 'ManagedIdentity'"
+
+In the list of managed identities, determine which are system-assigned and which are user-assigned. You can use the following criteria to determine the type.
+isExplicit=True [this is a user assigned MI]
+You can also use az identity list to just list user-assigned managed identities. For more information, see Create, list, or delete a user-assigned managed identity using the Azure CLI.
+
+#Now we must assess the role assignments
+Search your list of role assignments to see if there are any role assignments for our MIs
+
+########################################################################################
+# REIMPORT CUSTOM ROLES
+########################################################################################
+Use az role definition create to create each custom role from the files you created earlier. For more information, see Create or update Azure custom roles using Azure CLI.
+az role definition create --role-definition <role_definition>
+
+########################################################################################
+# Disable and re-enable system assigned MIs
+########################################################################################
+You must disable and then re-enable all MIs when doing a migration
+All VMs and other services that support MIs will be disabled
+
+########################################################################################
+# Recreate User Assigned MI
+########################################################################################
+Use az role assignment create to assign roles to user-assigned managed identities. For more information, see Assign a managed identity access to a resource using Azure CLI.
+
+########################################################################################
+# ASSIGN ROLES
+########################################################################################
+Use az role assignment create to assign roles to users, groups, and service principals. For more information, see Assign Azure roles using Azure CLI.
+az role assignment create --role <role_name_or_id> --assignee <assignee> --scope "/subscriptions/<subscriptionId>/resourceGroups/<resource_group>"
+

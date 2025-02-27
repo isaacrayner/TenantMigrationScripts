@@ -1,0 +1,54 @@
+#!/bin/bash
+
+# Variables (Update these)
+OLD_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+NEW_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+#!/bin/bash
+
+# Login and set old subscription
+echo "Logging into old subscription..."
+#az login --only-show-errors > /dev/null
+az account set --subscription $OLD_SUBSCRIPTION_ID
+
+# Get all resource groups in the old subscription
+RESOURCE_GROUPS=$(az group list --subscription $OLD_SUBSCRIPTION_ID --query "[].name" -o json)
+
+if [ -z "$RESOURCE_GROUPS" ] || [ "$RESOURCE_GROUPS" == "[]" ]; then
+    echo "No resource groups found in the old subscription."
+    exit 1
+fi
+
+# Loop through each resource group and export SSH keys
+echo "Fetching SSH keys from all resource groups..."
+for RG in $(echo $RESOURCE_GROUPS | jq -r '.[]'); do
+    echo "Checking Resource Group: $RG"
+
+    # Get SSH keys in this resource group
+    SSH_KEYS=$(az sshkey list --resource-group "$RG" --subscription $OLD_SUBSCRIPTION_ID --query "[].{Name:name, PublicKey:publicKey}" -o json)
+
+    if [ -z "$SSH_KEYS" ] || [ "$SSH_KEYS" == "[]" ]; then
+        echo "  No SSH keys found in $RG."
+        continue
+    fi
+
+    # Save keys to a temporary file
+    echo "$SSH_KEYS" > ssh-keys-$RG.json
+
+    # Switch to new subscription
+    az account set --subscription $NEW_SUBSCRIPTION_ID
+
+    # Import SSH keys into the same resource group in the new subscription
+    echo "Importing SSH keys to resource group $RG in new subscription..."
+    cat ssh-keys-$RG.json | jq -c '.[]' | while read key; do
+        NAME=$(echo $key | jq -r '.Name')
+        PUBLIC_KEY=$(echo $key | jq -r '.PublicKey')
+
+        echo "  Creating SSH Key: $NAME"
+        az sshkey create --name "$NAME" --public-key "$PUBLIC_KEY" --resource-group "$RG" --subscription "$NEW_SUBSCRIPTION_ID" --only-show-errors
+    done
+
+    # Cleanup
+    rm -f ssh-keys-$RG.json
+done
+
+echo "SSH key migration completed successfully!"

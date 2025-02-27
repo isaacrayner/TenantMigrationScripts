@@ -1,0 +1,133 @@
+#!/bin/bash
+
+# Set these variables before running the script
+OLD_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+NEW_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+EXPORT_FILE="/mnt/c/temp/metric-alerts.json"
+
+# Login to Azure (uncomment if needed)
+# az login
+
+# Variables - replace with your subscription IDs
+SOURCE_SUB="00000000-0000-0000-0000-000000000000"
+TARGET_SUB="target-subscription-id"
+
+# Set source subscription
+echo "Setting source subscription to $SOURCE_SUB"
+az account set --subscription "$SOURCE_SUB"
+
+# Export all metric alerts to a file
+echo "Exporting metric alerts from source subscription..."
+az monitor metrics alert list > all-alerts.json
+
+# Count the number of alerts
+ALERT_COUNT=$(az monitor metrics alert list --query "length(@)" -o tsv)
+echo "Found $ALERT_COUNT alerts in the source subscription"
+
+# Set target subscription
+echo "Setting target subscription to $TARGET_SUB"
+az account set --subscription "$TARGET_SUB"
+
+# Create temporary directory for individual alert files
+TEMP_DIR="/mnt/c/temp/temp_alerts"
+mkdir -p $TEMP_DIR
+
+# Process each alert individually to avoid JSON parsing issues
+echo "Processing each alert..."
+az monitor metrics alert list --subscription "$SOURCE_SUB" --query "[].name" -o tsv | while read -r ALERT_NAME; do
+    echo "Processing alert: $ALERT_NAME"
+    
+    # Get details of this specific alert
+    az monitor metrics alert show --name "$ALERT_NAME" --subscription "$SOURCE_SUB" > "$TEMP_DIR/$ALERT_NAME.json"
+    
+    # Extract properties needed for recreation
+    RG=$(cat "$TEMP_DIR/$ALERT_NAME.json" | az rest --method get --uri / --headers "Content-Type=application/json" --skip-authorization-header | jq -r '.resourceGroup')
+    DESCRIPTION=$(cat "$TEMP_DIR/$ALERT_NAME.json" | az rest --method get --uri / --headers "Content-Type=application/json" --skip-authorization-header | jq -r '.description // ""')
+    SEVERITY=$(cat "$TEMP_DIR/$ALERT_NAME.json" | az rest --method get --uri / --headers "Content-Type=application/json" --skip-authorization-header | jq -r '.severity')
+    ENABLED=$(cat "$TEMP_DIR/$ALERT_NAME.json" | az rest --method get --uri / --headers "Content-Type=application/json" --skip-authorization-header | jq -r '.enabled // "true"')
+    WINDOW_SIZE=$(cat "$TEMP_DIR/$ALERT_NAME.json" | az rest --method get --uri / --headers "Content-Type=application/json" --skip-authorization-header | jq -r '.windowSize')
+    EVAL_FREQ=$(cat "$TEMP_DIR/$ALERT_NAME.json" | az rest --method get --uri / --headers "Content-Type=application/json" --skip-authorization-header | jq -r '.evaluationFrequency')
+    
+    # Get scopes and replace subscription ID
+    SCOPES=$(cat "$TEMP_DIR/$ALERT_NAME.json" | az rest --method get --uri / --headers "Content-Type=application/json" --skip-authorization-header | jq -r '.scopes[]' | sed "s|subscriptions/$SOURCE_SUB|subscriptions/$TARGET_SUB|g")
+    
+    # Get condition information (simplified)
+    METRIC=$(cat "$TEMP_DIR/$ALERT_NAME.json" | az rest --method get --uri / --headers "Content-Type=application/json" --skip-authorization-header | jq -r '.criteria.allOf[0].metricName // ""')
+    OPERATOR=$(cat "$TEMP_DIR/$ALERT_NAME.json" | az rest --method get --uri / --headers "Content-Type=application/json" --skip-authorization-header | jq -r '.criteria.allOf[0].operator // ""')
+    THRESHOLD=$(cat "$TEMP_DIR/$ALERT_NAME.json" | az rest --method get --uri / --headers "Content-Type=application/json" --skip-authorization-header | jq -r '.criteria.allOf[0].threshold // ""')
+    AGGREGATION=$(cat "$TEMP_DIR/$ALERT_NAME.json" | az rest --method get --uri / --headers "Content-Type=application/json" --skip-authorization-header | jq -r '.criteria.allOf[0].timeAggregation // ""')
+    
+    # Get action groups (simplified)
+    ACTION_GROUPS=$(cat "$TEMP_DIR/$ALERT_NAME.json" | az rest --method get --uri / --headers "Content-Type=application/json" --skip-authorization-header | jq -r '.actions.actionGroups[].actionGroupId // ""' | sed "s|subscriptions/$SOURCE_SUB|subscriptions/$TARGET_SUB|g")
+    
+    # Create command file for this alert
+    CMD_FILE="$TEMP_DIR/${ALERT_NAME}_cmd.sh"
+    echo "#!/bin/bash" > "$CMD_FILE"
+    
+    echo "az monitor metrics alert create \\" >> "$CMD_FILE"
+    echo "  --name \"$ALERT_NAME\" \\" >> "$CMD_FILE"
+    
+    # Add resource group if available
+    if [ ! -z "$RG" ]; then
+        echo "  --resource-group \"$RG\" \\" >> "$CMD_FILE"
+    fi
+    
+    # Add description if available
+    if [ ! -z "$DESCRIPTION" ]; then
+        echo "  --description \"$DESCRIPTION\" \\" >> "$CMD_FILE"
+    fi
+    
+    # Add severity if available
+    if [ ! -z "$SEVERITY" ]; then
+        echo "  --severity $SEVERITY \\" >> "$CMD_FILE"
+    fi
+    
+    # Add enabled state if available
+    if [ ! -z "$ENABLED" ]; then
+        echo "  --enabled $ENABLED \\" >> "$CMD_FILE"
+    fi
+    
+    # Add window size if available
+    if [ ! -z "$WINDOW_SIZE" ]; then
+        echo "  --window-size $WINDOW_SIZE \\" >> "$CMD_FILE"
+    fi
+    
+    # Add evaluation frequency if available
+    if [ ! -z "$EVAL_FREQ" ]; then
+        echo "  --evaluation-frequency $EVAL_FREQ \\" >> "$CMD_FILE"
+    fi
+    
+    # Add scopes if available
+    if [ ! -z "$SCOPES" ]; then
+        for SCOPE in $SCOPES; do
+            echo "  --scopes \"$SCOPE\" \\" >> "$CMD_FILE"
+        done
+    fi
+    
+    # Add condition if available
+    if [ ! -z "$METRIC" ] && [ ! -z "$OPERATOR" ] && [ ! -z "$THRESHOLD" ] && [ ! -z "$AGGREGATION" ]; then
+        echo "  --condition \"type=static threshold=$THRESHOLD metric=$METRIC operator=$OPERATOR aggregation=$AGGREGATION\" \\" >> "$CMD_FILE"
+    fi
+    
+    # Add action groups if available
+    if [ ! -z "$ACTION_GROUPS" ]; then
+        for AG in $ACTION_GROUPS; do
+            echo "  --action \"$AG\" \\" >> "$CMD_FILE"
+        done
+    fi
+    
+    # Remove the trailing backslash from the last line
+    sed -i '$ s/ \\$//' "$CMD_FILE"
+    
+    # Make the command file executable
+    chmod +x "$CMD_FILE"
+    
+    echo "Command file created: $CMD_FILE"
+    
+    # Execute the command (uncomment when ready)
+    # bash "$CMD_FILE"
+done
+
+echo "Alert migration script complete!"
+echo "Review the command files in $TEMP_DIR before executing them."
+echo "To execute all command files: find $TEMP_DIR -name '*_cmd.sh' -exec bash {} \;"

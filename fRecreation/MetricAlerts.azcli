@@ -1,0 +1,41 @@
+#!/bin/bash
+# Set these variables before running the script
+OLD_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+NEW_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+EXPORT_FILE="/mnt/c/temp/fixed-metric-alerts.json"
+
+echo "Logging into new subscription..."
+az account set --subscription $NEW_SUBSCRIPTION_ID
+
+echo "Recreating metric alerts..."
+jq -c '.[]' "$EXPORT_FILE" | while read -r ALERT; do
+    NAME=$(echo "$ALERT" | jq -r '.Name')
+    RESOURCE=$(echo "$ALERT" | jq -r '.Resource')
+    CONDITION=$(echo "$ALERT" | jq -c '.Condition')  # Preserve JSON structure
+    WINDOW_SIZE=$(echo "$ALERT" | jq -r '.WindowSize')
+    EVALUATION_FREQUENCY=$(echo "$ALERT" | jq -r '.EvaluationFrequency')
+    SEVERITY=$(echo "$ALERT" | jq -r '.Severity')
+    DESCRIPTION=$(echo "$ALERT" | jq -r '.Description')
+    ACTIONS=$(echo "$ALERT" | jq -r '.Actions | map(.actionGroupId) | join(",")')
+
+    # Extract the resource group name from the resource ID
+    RESOURCE_GROUP=$(echo "$RESOURCE" | awk -F'/' '{print $5}')
+
+    if [[ -z "$RESOURCE" || "$RESOURCE" == "null" ]]; then
+        echo "No valid resource found for alert: $NAME, skipping..."
+        continue
+    fi
+
+    echo "  Recreating Metric Alert: $NAME in $RESOURCE_GROUP..."
+    az monitor metrics alert create --name "$NAME" \
+        --resource-group "$RESOURCE_GROUP" \
+        --scopes "$RESOURCE" \
+        --condition "$CONDITION" \
+        --description "$DESCRIPTION" \
+        --window-size "$WINDOW_SIZE" \
+        --evaluation-frequency "$EVALUATION_FREQUENCY" \
+        --severity "$SEVERITY" \
+        --action-group "$ACTIONS" --only-show-errors
+done
+
+echo "All metric alerts reattached successfully!"
