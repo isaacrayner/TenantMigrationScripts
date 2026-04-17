@@ -1,6 +1,15 @@
+## DESCRIPTION: Backs up Key Vault access policies for all Key Vaults across all resource groups
+##              to individual JSON files. One file is created per Key Vault.
+## USAGE:       1. Update SUBSCRIPTION_ID with the source subscription ID.
+##              2. Update BACKUP_DIR to your desired output directory.
+##              3. Run in WSL/bash with Azure CLI installed and authenticated.
+##              4. Output JSON files are used by 2-KeyVault.azcli in 7-Recreation.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/../migration-params.sh"
+
 #Recreate the User Assigned Identities at the destination end
 # Set variables
-SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+SUBSCRIPTION_ID="$SOURCE_SUBSCRIPTION_ID"
 
 # Ensure Azure CLI is logged in
 az account set --subscription "$SUBSCRIPTION_ID"

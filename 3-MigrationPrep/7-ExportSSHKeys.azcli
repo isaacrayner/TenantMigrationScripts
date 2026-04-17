@@ -1,10 +1,13 @@
-#!/bin/bash
+## DESCRIPTION: Exports SSH public keys from all resource groups in the source subscription
+##              and imports them into the same resource groups in the destination subscription.
+## USAGE:       1. Update OLD_SUBSCRIPTION_ID and NEW_SUBSCRIPTION_ID.
+##              2. Run in WSL/bash with Azure CLI and jq installed and authenticated.
 
-# Variables (Update these)
-OLD_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
-NEW_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
 #!/bin/bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/../migration-params.sh"
 
+# Variables come from migration-params.sh (OLD_SUBSCRIPTION_ID and NEW_SUBSCRIPTION_ID)
 # Login and set old subscription
 echo "Logging into old subscription..."
 #az login --only-show-errors > /dev/null

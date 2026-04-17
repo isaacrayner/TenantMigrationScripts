@@ -1,13 +1,15 @@
-#!/bin/bash
+## DESCRIPTION: Reattaches public IP addresses to migrated VMs in the destination subscription.
+##              Reads the IP-to-VM mapping saved by 1-PublicIPdiss.azcli.
+## USAGE:       1. Update NEW_SUBSCRIPTION_ID and TEMP_FILE to match the values used in
+##                 1-PublicIPdiss.azcli.
+##              2. Ensure VMs have already been migrated to the destination subscription.
+##              3. Run in WSL/bash with Azure CLI and jq installed and authenticated.
 
-# Variables (Update these)
-OLD_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
-NEW_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+#!/bin/bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/../migration-params.sh"
+# Subscription variables come from migration-params.sh (OLD_SUBSCRIPTION_ID, NEW_SUBSCRIPTION_ID)
 TEMP_FILE="/mnt/c/temp/public_ips.json"
-
-#!/bin/bash
-
-# Step 5: Switch to the new subscription
 echo "Logging into new subscription..."
 az account set --subscription $NEW_SUBSCRIPTION_ID
 

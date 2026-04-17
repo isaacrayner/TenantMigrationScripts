@@ -1,6 +1,13 @@
+## DESCRIPTION: Exports ARM templates for every resource in every resource group to a local
+##              directory. Skips resources that have already been exported (safe to re-run).
+## USAGE:       1. Authenticate manually before running (Connect-AzAccount is commented out).
+##              2. Update $baseOutputDirectory to your desired local export path.
+##              3. Run in PowerShell with the Az module installed.
+. (Join-Path $PSScriptRoot ".\..\migration-params.ps1")
+
 # Log in to Azure
-#Connect-AzAccount -Tenant '00000000-0000-0000-0000-000000000000'
-#Set-AzContext -Subscription '00000000-0000-0000-0000-000000000000'
+#Connect-AzAccount -TenantId $sourceTenantId
+#Set-AzContext -Subscription $sourceSubscriptionId
 
 # Define the base output directory
 $baseOutputDirectory = "C:\CSPARMExports\Boxlight\Resources"

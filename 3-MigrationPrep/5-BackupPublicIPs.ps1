@@ -1,3 +1,11 @@
+## DESCRIPTION: Exports all Public IP address details from the source subscription to a CSV file.
+##              Optionally recreates those Public IPs in the destination subscription.
+## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
+##              2. Run in PowerShell with the Az module installed.
+##              3. Answer Y at the prompt to also recreate IPs in the destination subscription.
+##              4. Review C:\temp\PublicIP_Migration.log for results.
+. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+
 # Define log file
 $logFile = "C:\temp\PublicIP_Migration.log"
 
@@ -18,8 +26,8 @@ function Write-Log {
 
 # Set export file path
 $csvFile = "C:\temp\PublicIP_Export.csv"
-$subscriptionId = "00000000-0000-0000-0000-000000000000"
-$newSubscriptionId = "00000000-0000-0000-0000-000000000000"
+$subscriptionId    = $sourceSubscriptionId
+$newSubscriptionId = $destinationSubscriptionId
 
 # Step 2: Set Subscription Context
 try {

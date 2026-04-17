@@ -1,7 +1,16 @@
+## DESCRIPTION: Re-enables managed identities (system-assigned and user-assigned) on VMs,
+##              App Services, Application Gateways, and SQL Servers after migration.
+##              Reads from the CSV produced by 11-BackupIdentities.ps1.
+##              NOTE: After running, assign RBAC permissions back to all resources.
+## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
+##              2. Ensure C:\temp\AzureMIdentityBackup\ManagedIdentityResources.csv exists.
+##              3. Run in PowerShell with the Az module installed.
+. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+
 ##### Make sure to remember, after this GO AND ASSIGN THE RBAC PERMISSIONS to KeyVaults #####
 
-# Set Subscription
-$subscriptionId = "00000000-0000-0000-0000-000000000000"
+# Set Subscription (loaded from migration-params.ps1)
+$subscriptionId = $destinationSubscriptionId
 Set-AzContext -SubscriptionId $subscriptionId
 
 # Load the list of resources

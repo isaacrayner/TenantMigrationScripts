@@ -1,3 +1,13 @@
+## DESCRIPTION: Updates Key Vault tenant IDs and removes stale access policies after tenant
+##              migration, then restores access policies from the JSON backup files.
+##              NOTE: After running, manually reassign RBAC permissions for managed identities.
+## USAGE:       1. Update the subscription ID in az account set.
+##              2. For the restore section, ensure BACKUP_DIR contains the JSON files from
+##                 12-BackupAccessPolicies.azcli.
+##              3. Run in WSL/bash with Azure CLI and jq installed and authenticated.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/../migration-params.sh"
+
 ##Remember to recreate the Access Policies for the Key Vault after the Key Vault is recreated
 ##Specifically, allow the Managed Identities access to the keyvault using access policies. See spreadsheet for details
 #Update the tenant ID associated with all existing key vaults in the subscription to the target directory.
@@ -5,7 +15,7 @@
 #Add new access policy entries associated with the target directory.
 
 ########SINGLE########
-az account set -s 00000000-0000-0000-0000-000000000000                                    # Select your Azure Subscription
+az account set -s "$DESTINATION_SUBSCRIPTION_ID"                           # Select your Azure Subscription
 tenantId=$(az account show --query tenantId)                               # Get your tenantId
 az keyvault update -n myvault --remove Properties.accessPolicies           # Remove the access policies
 az keyvault update -n myvault --set Properties.tenantId=$tenantId          # Update the key vault tenantId
@@ -13,7 +23,7 @@ az keyvault update -n myvault --set Properties.tenantId=$tenantId          # Upd
 
 ########MANY########
 # Set Azure Subscription
-az account set -s 00000000-0000-0000-0000-000000000000
+az account set -s "$DESTINATION_SUBSCRIPTION_ID"
 
 # Get Tenant ID
 tenantId=$(az account show --query tenantId --output tsv)

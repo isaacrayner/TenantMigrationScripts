@@ -1,7 +1,15 @@
+## DESCRIPTION: Restores VM backup protection in the destination subscription using the backup
+##              configuration CSV produced by 13-BackupVMBackupSettings.ps1.
+## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
+##              2. Ensure C:\temp\AzureBackupSettingsBackup\BackupConfig.csv exists.
+##              3. Ensure Recovery Services Vaults and backup policies exist in the destination.
+##              4. Run in PowerShell with the Az module installed.
+. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+
 ##### Restore the Backup Policy on all VMs (from backup restore file) #####
 
-# Set Subscription
-$subscriptionId = "00000000-0000-0000-0000-000000000000"
+# Set Subscription (loaded from migration-params.ps1)
+$subscriptionId = $destinationSubscriptionId
 Set-AzContext -SubscriptionId $subscriptionId
 
 # Load backup configuration

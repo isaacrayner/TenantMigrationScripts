@@ -1,8 +1,17 @@
+## DESCRIPTION: Backs up Azure File Share backup configurations from all Recovery Services Vaults
+##              across all resource groups to a CSV file.
+## USAGE:       1. Update SUBSCRIPTION_ID with the source subscription ID.
+##              2. Update OUTPUT_FILE to your desired output path.
+##              3. Run in WSL/bash with Azure CLI and jq installed and authenticated.
+##              4. Output CSV is used by 6-DisableSABackups.azcli and 9-SABackups.azcli.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/../migration-params.sh"
+
 ##### Backup Storage Account Backup Configurations #####
 #!/bin/bash
 
 # Set variables
-SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+SUBSCRIPTION_ID="$SOURCE_SUBSCRIPTION_ID"
 OUTPUT_FILE="/mnt/c/temp/AzureStorageBackupSettingsBackup/storage-backup.csv"
 
 

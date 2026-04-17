@@ -1,6 +1,13 @@
-# Define variables
-$sourceSubscriptionId = "00000000-0000-0000-0000-000000000000"
-$destSubscriptionId = "00000000-0000-0000-0000-000000000000"
+## DESCRIPTION: Exports all Azure Monitor Action Groups from the source subscription to a JSON
+##              file, then recreates them in the destination subscription. Requires Azure CLI.
+## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
+##              2. Review and edit C:\temp\ActionGroups_Export.json before import if needed.
+##              3. Run in PowerShell with the Azure CLI (az) installed.
+##              4. Press Enter at the prompt to proceed with import after reviewing the export.
+. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+
+# Define variables (loaded from migration-params.ps1)
+# $sourceSubscriptionId and $destSubscriptionId are set from migration-params.ps1
 $exportFile = "C:\temp\ActionGroups_Export.json"
 
 # Ensure Azure CLI is installed

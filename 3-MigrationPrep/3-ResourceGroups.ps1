@@ -1,3 +1,17 @@
+## DESCRIPTION: Recreates all resource groups from the source subscription in the destination
+##              subscription, preserving location and tags. Run this early in migration prep
+##              before moving any resources.
+## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
+##              2. Uncomment Connect-AzAccount if not already authenticated.
+##              3. Run in PowerShell with the Az module installed.
+##              4. Review C:\temp\AzureResourceGroupMigration.log for results.
+. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+
+# Define source and destination subscriptions (loaded from migration-params.ps1)
+$sourceSubscription      = $sourceSubscriptionId
+$destinationSubscription = $destinationSubscriptionId
+
+
 # Define log file
 $logFile = "C:\temp\AzureResourceGroupMigration.log"
 
@@ -12,9 +26,7 @@ function Write-Log {
     Add-Content -Path $logFile -Value $logMessage
 }
 
-# Define source and destination subscriptions
-$sourceSubscription = "00000000-0000-0000-0000-000000000000"
-$destinationSubscription = "00000000-0000-0000-0000-000000000000"
+
 
 try {
     # Log in to Azure

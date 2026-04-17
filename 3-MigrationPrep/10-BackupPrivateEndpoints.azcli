@@ -1,7 +1,16 @@
+## DESCRIPTION: Backs up all private endpoint configurations in the subscription to individual
+##              JSON files. One file is created per private endpoint.
+## USAGE:       1. Update the subscription ID in the az account set command.
+##              2. Optionally update the output path (/mnt/c/temp/AzurePrivateEndpointsBackup).
+##              3. Run in WSL/bash with Azure CLI installed and authenticated.
+##              4. Output JSON files are used by 3-PrivateEndpoints.azcli in 7-Recreation.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/../migration-params.sh"
+
 # Backup all Private Endpoints in the subscription
 # Set these variables before running the script
 
-az account set --subscription "00000000-0000-0000-0000-000000000000"
+az account set --subscription "$SOURCE_SUBSCRIPTION_ID"
 
 mkdir -p /mnt/c/temp/AzurePrivateEndpointsBackup
 

@@ -1,13 +1,16 @@
+## DESCRIPTION: Backs up all NAT Gateway configurations and associated VNet subnet details
+##              to JSON files for later restoration after migration.
+## USAGE:       1. Update SUBSCRIPTION_ID with the source subscription ID.
+##              2. Update BACKUP_DIR to your desired output directory.
+##              3. Run in WSL/bash with Azure CLI and jq installed and authenticated.
+##              4. Output JSON files are used by 6-NATGateway.azcli in 7-Recreation.
+
 #!/bin/bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/../migration-params.sh"
 
 # Set variables
-SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
-
-# Ensure Azure CLI is logged in
-az account set --subscription "$SUBSCRIPTION_ID"
-
-# Set backup directory
-BACKUP_DIR="/mnt/c/temp/AzureNATGatewayBackup"
+SUBSCRIPTION_ID="$SOURCE_SUBSCRIPTION_ID"
 
 echo "Fetching all resource groups..."
 RESOURCE_GROUPS=$(az group list --query "[].name" -o tsv)

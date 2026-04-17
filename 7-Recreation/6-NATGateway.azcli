@@ -1,8 +1,15 @@
-#!/bin/bash
+## DESCRIPTION: Reattaches NAT Gateways to their original subnets after migration, using the
+##              subnet backup JSON produced by 15-BackupNATsettings.azcli.
+## USAGE:       1. Update SUBSCRIPTION_ID with the destination subscription ID.
+##              2. Update BACKUP_DIR to point to the folder containing the backup JSON files.
+##              3. Run in WSL/bash with Azure CLI and jq installed and authenticated.
 
+#!/bin/bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/../migration-params.sh"
 
 # Set variables
-SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+SUBSCRIPTION_ID="$DESTINATION_SUBSCRIPTION_ID"
 
 # Ensure Azure CLI is logged in
 az account set --subscription "$SUBSCRIPTION_ID"

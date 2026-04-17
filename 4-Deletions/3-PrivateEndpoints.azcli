@@ -1,7 +1,14 @@
+## DESCRIPTION: Deletes all private endpoints in the subscription. Run this before migration
+##              as private endpoints must be removed before resources can be moved.
+## USAGE:       1. Update the subscription ID in the az account set command.
+##              2. Run in WSL/bash with Azure CLI installed and authenticated.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/../migration-params.sh"
+
 # Delete Private Endpoints in the subscription
 # Set these variables before running the script
 
-az account set --subscription "00000000-0000-0000-0000-000000000000"
+az account set --subscription "$SOURCE_SUBSCRIPTION_ID"
 
 for pe in $(az network private-endpoint list --query "[].id" -o tsv); do
     name=$(az network private-endpoint show --ids $pe --query "name" -o tsv)

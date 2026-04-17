@@ -1,8 +1,17 @@
+## DESCRIPTION: Backs up VM backup configurations (vault name, policy name, VM name) from all
+##              Recovery Services Vaults to a CSV file. Used by the disable and restore scripts.
+##              NOTE: Remove soft delete on Recovery Services Vaults before running.
+## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
+##              2. Update $backupFolder to your desired output directory.
+##              3. Run in PowerShell with the Az module installed.
+##              4. Output CSV is used by 5-DisableBackups.ps1 and 8-VMBackups.ps1.
+. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+
 ##### Create the backup of backups :-) #####
 ##### remember to REMOVE SOFT DELETE ON THE RECOVERY SERVICES VAULTS #####
 
-# Set Subscription
-$subscriptionId = "00000000-0000-0000-0000-000000000000"
+# Set Subscription (loaded from migration-params.ps1)
+$subscriptionId = $sourceSubscriptionId
 Set-AzContext -SubscriptionId $subscriptionId
 
 # Set output file

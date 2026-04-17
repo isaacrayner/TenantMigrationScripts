@@ -1,7 +1,15 @@
 
 
-# Set Subscription
-$subscriptionId = "00000000-0000-0000-0000-000000000000"
+## DESCRIPTION: Inventories all managed identities (system-assigned and user-assigned) across
+##              VMs, App Services, Application Gateways, Function Apps, and SQL Servers.
+##              Exports resource identity details and RBAC assignments to CSV files.
+## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
+##              2. Run in PowerShell with the Az module installed.
+##              3. Output CSVs are used by 4-DisableMIdentities.ps1 and 4-A-RecreateMIdentities.ps1.
+. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+
+# Set Subscription (loaded from migration-params.ps1)
+$subscriptionId = $sourceSubscriptionId
 Set-AzContext -SubscriptionId $subscriptionId
 
 # Initialize arrays

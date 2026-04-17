@@ -1,6 +1,13 @@
+## DESCRIPTION: Exports full ARM templates and parameter files for each resource group to a
+##              local directory. Saves both a _template.json and _parameters.json per RG.
+## USAGE:       1. Update the tenant ID in Connect-AzAccount and the subscription ID in Set-AzContext.
+##              2. Update $outputDirectory to your desired local export path.
+##              3. Run in PowerShell with the Az module installed.
+. (Join-Path $PSScriptRoot ".\..\migration-params.ps1")
+
 # Ensure Az module is up to date
-Connect-AzAccount -Tenant '00000000-0000-0000-0000-000000000000'
-Set-AzContext -Subscription '00000000-0000-0000-0000-000000000000'
+Connect-AzAccount -TenantId $sourceTenantId
+Set-AzContext -Subscription $sourceSubscriptionId
 
 # Set Output Directory
 $outputDirectory = "C:\CSPARMExports\Boxlight\RGExports"

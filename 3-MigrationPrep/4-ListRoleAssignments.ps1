@@ -1,11 +1,19 @@
+## DESCRIPTION: Exports all RBAC role assignments, managed identities, service principals, and
+##              user principals from the source subscription to CSV files. Also includes notes
+##              on recreating service principals in the destination tenant.
+## USAGE:       1. Replace <source-tenant-id> and <source-subscription-id> with correct values.
+##              2. Update file paths as needed.
+##              3. Run each section in sequence in PowerShell with the Az module installed.
+. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+
 
 #Download Role Assignments
 #https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-list-portal#list-role-assignments-at-a-scope
 #You can download role assignments at a scope in CSV or JSON formats. This can be helpful if you need to inspect the list in a spreadsheet or take an inventory when migrating a subscription.
 
 #STEP ONE: LIST ALL ROLE ASSIGNMENTS
-Connect-AzAccount -TenantId <source-tenant-id>
-$SubscriptionId = "<source-subscription-id>"
+Connect-AzAccount -TenantId $sourceTenantId
+$SubscriptionId = $sourceSubscriptionId
 Select-AzSubscription -SubscriptionId $SubscriptionId
 $RoleAssignments = Get-AzRoleAssignment
 

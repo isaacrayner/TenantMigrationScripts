@@ -1,10 +1,17 @@
+## DESCRIPTION: Reads all registered resource providers from the source subscription and registers
+##              them in the destination subscription. Ensures feature parity before migration.
+## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
+##              2. Run in PowerShell with the Az module installed.
+##              3. Check C:\temp\ResourceProviderRegistrationErrors.log for any failures.
+. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+
 #Register all the resources in each subscription, so that they match
 # Log in to Azure (if not already logged in)
 Connect-AzAccount
 
-# Define source and destination subscriptions
-$sourceSubscription = "00000000-0000-0000-0000-000000000000"
-$destinationSubscription = "00000000-0000-0000-0000-000000000000"
+# Define source and destination subscriptions (loaded from migration-params.ps1)
+$sourceSubscription      = $sourceSubscriptionId
+$destinationSubscription = $destinationSubscriptionId
 
 # Step 1: Set context to the source subscription
 Set-AzContext -Subscription $sourceSubscription

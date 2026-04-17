@@ -1,16 +1,19 @@
+## DESCRIPTION: Exports all metric alerts from the source subscription to a JSON file and
+##              generates shell command files to recreate each alert in the target subscription.
+## USAGE:       1. Update OLD_SUBSCRIPTION_ID, NEW_SUBSCRIPTION_ID, SOURCE_SUB, TARGET_SUB,
+##                 and EXPORT_FILE with correct values.
+##              2. Run in WSL/bash with Azure CLI and jq installed and authenticated.
+##              3. Generated command files in TEMP_DIR can be reviewed and executed individually.
+##              4. The output JSON is used by MetricAlerts.azcli in 7-Recreation.
+
 #!/bin/bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/../migration-params.sh"
 
-# Set these variables before running the script
-OLD_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
-NEW_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+# Subscription variables come from migration-params.sh
+# OLD_SUBSCRIPTION_ID=$SOURCE_SUBSCRIPTION_ID, NEW_SUBSCRIPTION_ID=$DESTINATION_SUBSCRIPTION_ID
+# SOURCE_SUB=$SOURCE_SUBSCRIPTION_ID, TARGET_SUB=$DESTINATION_SUBSCRIPTION_ID
 EXPORT_FILE="/mnt/c/temp/metric-alerts.json"
-
-# Login to Azure (uncomment if needed)
-# az login
-
-# Variables - replace with your subscription IDs
-SOURCE_SUB="00000000-0000-0000-0000-000000000000"
-TARGET_SUB="target-subscription-id"
 
 # Set source subscription
 echo "Setting source subscription to $SOURCE_SUB"

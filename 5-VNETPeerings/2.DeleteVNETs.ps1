@@ -1,8 +1,15 @@
+## DESCRIPTION: Removes all VNet peerings in the subscription. VNet peerings must be deleted
+##              before VNets can be migrated across tenants.
+## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
+##              2. Run 1.Export-VNETs.ps1 first to back up peering configurations.
+##              3. Run in PowerShell with the Az module installed.
+. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+
 # Connect to Azure
 Connect-AzAccount
 
-# Set the Subscription
-$subscriptionId = '00000000-0000-0000-0000-000000000000'
+# Set the Subscription (loaded from migration-params.ps1)
+$subscriptionId = $sourceSubscriptionId
 Select-AzSubscription -SubscriptionId $subscriptionId
 
 # Get all Virtual Networks

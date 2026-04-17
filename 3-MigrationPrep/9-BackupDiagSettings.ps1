@@ -1,4 +1,12 @@
-set-azcontext -Subscription 00000000-0000-0000-0000-000000000000
+## DESCRIPTION: Backs up diagnostic settings for supported Azure resource types to individual
+##              JSON files. Only processes resource types known to support diagnostic settings.
+## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
+##              2. Update $backupPath to your desired output directory.
+##              3. Add additional resource types to $supportedResourceTypes as needed.
+##              4. Run in PowerShell with the Az module installed.
+. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+
+Set-AzContext -Subscription $sourceSubscriptionId
 
 # Set Backup Path
 $backupPath = "C:\temp\AzureDiagnosticsBackup\"

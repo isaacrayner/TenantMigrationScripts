@@ -1,8 +1,17 @@
+## DESCRIPTION: Recreates VNet peerings in the destination subscription from the CSV exported
+##              by 1.Export-VNETs.ps1. Skips peerings that already exist. Writes a timestamped
+##              log file for review.
+## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
+##              2. Update the CSV path to match the export from 1.Export-VNETs.ps1.
+##              3. Run in PowerShell with the Az module installed.
+##              4. Review the generated VNetPeering_Log_*.txt for results.
+. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+
 # Script to create Azure VNet peerings from CSV
 # Save this as a .ps1 file and run it
 
-# Set the Subscription
-$subscriptionId = '00000000-0000-0000-0000-000000000000'
+# Set the Subscription (loaded from migration-params.ps1)
+$subscriptionId = $destinationSubscriptionId
 Select-AzSubscription -SubscriptionId $subscriptionId
 
 # Import the CSV file

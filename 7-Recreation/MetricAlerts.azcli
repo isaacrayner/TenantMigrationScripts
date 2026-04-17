@@ -1,7 +1,12 @@
+## DESCRIPTION: Recreates metric alerts in the destination subscription from the fixed JSON
+##              export file produced by 8-BackupMetricAlerts.azcli.
+## USAGE:       1. Update NEW_SUBSCRIPTION_ID and EXPORT_FILE.
+##              2. Run in WSL/bash with Azure CLI and jq installed and authenticated.
+
 #!/bin/bash
-# Set these variables before running the script
-OLD_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
-NEW_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/../migration-params.sh"
+# Subscription variables come from migration-params.sh (OLD_SUBSCRIPTION_ID, NEW_SUBSCRIPTION_ID)
 EXPORT_FILE="/mnt/c/temp/fixed-metric-alerts.json"
 
 echo "Logging into new subscription..."

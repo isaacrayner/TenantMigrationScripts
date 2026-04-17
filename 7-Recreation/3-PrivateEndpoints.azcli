@@ -1,5 +1,12 @@
+## DESCRIPTION: Recreates all private endpoints in the destination subscription from the JSON
+##              backup files produced by 10-BackupPrivateEndpoints.azcli.
+## USAGE:       1. Update the subscription ID in az account set.
+##              2. Update BACKUP_DIR to point to the folder containing the backup JSON files.
+##              3. Run in WSL/bash with Azure CLI and jq installed and authenticated.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/../migration-params.sh"
 
-az account set --subscription "00000000-0000-0000-0000-000000000000"
+az account set --subscription "$DESTINATION_SUBSCRIPTION_ID"
 
 # Set backup file path
 BACKUP_DIR="/mnt/c/temp/AzurePrivateEndpointsBackup/"

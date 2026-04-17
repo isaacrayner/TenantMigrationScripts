@@ -1,8 +1,16 @@
+## DESCRIPTION: Deletes miscellaneous resources that must be removed before tenant migration:
+##              disk snapshots, VPN gateway connections/gateways/local gateways, NAT gateways,
+##              and Application Gateways. Run each section selectively as needed.
+## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
+##              2. Review and update resource group names and resource names in each section.
+##              3. Run sections individually in PowerShell with the Az module installed.
+. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+
 #########
 # Set the Context
 #########
 
-set-azcontext -Subscription 00000000-0000-0000-0000-000000000000
+Set-AzContext -Subscription $sourceSubscriptionId
 
 #########
 # Delete All Snapshots

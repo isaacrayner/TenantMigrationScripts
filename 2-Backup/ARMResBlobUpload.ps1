@@ -1,8 +1,19 @@
+## DESCRIPTION: Exports ARM templates for every resource in every resource group and uploads them
+##              to Azure Blob Storage. Designed to run as an Azure Automation runbook using the
+##              Automation Account's Managed Identity.
+## USAGE:       1. Update $storageAccountName, $containerName, and $resourceExportPath.
+##              2. Deploy as a runbook in an Azure Automation Account with Managed Identity enabled.
+##              3. Ensure the Managed Identity has Contributor access to the subscription and
+##                 Storage Blob Data Contributor on the target storage account.
+##              NOTE: This script runs in Azure Automation. Update $sourceSubscriptionId in
+##                    migration-params.ps1, or hardcode it below if the params file is unavailable.
+#. (Join-Path $PSScriptRoot "..\migration-params.ps1")  # Uncomment if running locally
+
 # Authenticate using the Managed Identity of the Azure Automation Account
 Connect-AzAccount -Identity
 
 # Set the specific subscription context
-Set-AzContext -Subscription '00000000-0000-0000-0000-000000000000'
+Set-AzContext -Subscription '00000000-0000-0000-0000-000000000000'  # Update from migration-params.ps1
 
 # Define storage account details
 $storageAccountName = "yourstorageaccountname"

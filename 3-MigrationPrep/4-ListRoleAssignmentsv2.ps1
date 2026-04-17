@@ -1,3 +1,15 @@
+## DESCRIPTION: Exports all RBAC role assignments from the source subscription to JSON and CSV.
+##              Run this during migration prep. To restore assignments in the destination,
+##              use 7-Recreation/5-RestoreRoleAssignments.ps1.
+## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
+##              2. Run in PowerShell with the Az module installed.
+##              3. Review C:\temp\RBAC_Migration.log for results.
+. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+
+# Subscription IDs (loaded from migration-params.ps1)
+$subscriptionId    = $sourceSubscriptionId
+$newSubscriptionId = $destinationSubscriptionId
+
 # Define log file
 $logFile = "C:\temp\RBAC_Migration.log"
 
@@ -15,9 +27,6 @@ function Write-Log {
 # Set file paths for export
 $jsonFile = "C:\temp\RBAC_Assignments.json"
 $csvFile = "C:\temp\RBAC_Assignments.csv"
-
-$subscriptionId = "00000000-0000-0000-0000-000000000000"
-$newSubscriptionId = "00000000-0000-0000-0000-000000000000"
 
 
 # Step 1: Log in to Azure
@@ -62,44 +71,4 @@ try {
     exit
 }
 
-# Step 4: Prompt for Reassignment after Subscription Migration
-$restoreRBAC = Read-Host "Do you want to reapply RBAC roles in the new subscription? (Y/N)"
-
-if ($restoreRBAC -eq "Y" -or $restoreRBAC -eq "y") {
-    # Step 5: Log in to new tenant and set subscription context
-    try {
-        Write-Log "Logging into the new tenant..."
-        Connect-AzAccount
-        Write-Log "Azure login successful in new tenant."
-        
-        Write-Log "Setting context to new subscription: $newSubscriptionId"
-        Set-AzContext -SubscriptionId $newSubscriptionId
-        Write-Log "Context switched to new subscription."
-    } catch {
-        Write-Log "ERROR: Failed to log in to new tenant or set subscription context. $_"
-        exit
-    }
-
-    # Step 6: Read and Reapply RBAC Assignments
-    try {
-        Write-Log "Reading RBAC assignments from $jsonFile..."
-        $rbacAssignments = Get-Content -Path $jsonFile | ConvertFrom-Json
-
-        Write-Log "Reapplying RBAC assignments in the new subscription..."
-        foreach ($assignment in $rbacAssignments) {
-            try {
-                Write-Log "Assigning role: $($assignment.RoleDefinitionName) to $($assignment.DisplayName) at scope $($assignment.Scope)"
-                New-AzRoleAssignment -ObjectId $assignment.ObjectId -RoleDefinitionName $assignment.RoleDefinitionName -Scope $assignment.Scope
-                Write-Log "Successfully assigned role to $($assignment.DisplayName)"
-            } catch {
-                Write-Log "ERROR: Failed to assign role to $($assignment.DisplayName). Error: $_"
-            }
-        }
-        Write-Log "RBAC reassignment completed successfully."
-    } catch {
-        Write-Log "ERROR: Failed to read RBAC assignments from file. $_"
-        exit
-    }
-}
-
-Write-Log "RBAC migration process completed."
+Write-Log "Export complete. To restore assignments in the destination subscription, run 7-Recreation/5-RestoreRoleAssignments.ps1."
