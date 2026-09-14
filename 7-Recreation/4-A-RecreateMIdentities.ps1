@@ -34,7 +34,8 @@ foreach ($resource in $resourcesWithMI) {
 
         if ($resource.IdentityType -match "UserAssigned") {
             # ✅ Correctly enable User Assigned Managed Identity
-            $userAssignedIdentities = ($resource.UserAssignedIdentities | ConvertFrom-Json).PSObject.Properties.Name
+            $userAssignedIdentities = ($resource.UserAssignedIdentities | ConvertFrom-Json).PSObject.Properties.Name |
+                ForEach-Object { $_ -replace [regex]::Escape($sourceSubscriptionId), $destinationSubscriptionId }
             $vm.Identity = @{ Type = "UserAssigned"; UserAssignedIdentities = @{} }
             foreach ($id in $userAssignedIdentities) {
                 $vm.Identity.UserAssignedIdentities[$id] = @{}
@@ -49,7 +50,8 @@ foreach ($resource in $resourcesWithMI) {
             Set-AzWebApp -ResourceGroupName $rgName -Name $resource.ResourceName -AssignIdentity "SystemAssigned"
         }
         if ($resource.IdentityType -match "UserAssigned") {
-            $userAssignedIdentities = ($resource.UserAssignedIdentities | ConvertFrom-Json).PSObject.Properties.Name
+            $userAssignedIdentities = ($resource.UserAssignedIdentities | ConvertFrom-Json).PSObject.Properties.Name |
+                ForEach-Object { $_ -replace [regex]::Escape($sourceSubscriptionId), $destinationSubscriptionId }
             Set-AzWebApp -ResourceGroupName $rgName -Name $resource.ResourceName -AssignIdentity $userAssignedIdentities
         }
     }
@@ -61,7 +63,8 @@ foreach ($resource in $resourcesWithMI) {
             Set-AzApplicationGateway -ApplicationGateway $appGw -IdentityType "SystemAssigned"
         }
         if ($resource.IdentityType -match "UserAssigned") {
-            $userAssignedIdentities = ($resource.UserAssignedIdentities | ConvertFrom-Json).PSObject.Properties.Name
+            $userAssignedIdentities = ($resource.UserAssignedIdentities | ConvertFrom-Json).PSObject.Properties.Name |
+                ForEach-Object { $_ -replace [regex]::Escape($sourceSubscriptionId), $destinationSubscriptionId }
             Set-AzApplicationGateway -ApplicationGateway $appGw -IdentityType "UserAssigned" -UserAssignedIdentity $userAssignedIdentities
         }
     }
@@ -72,7 +75,8 @@ foreach ($resource in $resourcesWithMI) {
             Set-AzSqlServer -ResourceGroupName $rgName -ServerName $resource.ResourceName -AssignIdentity "SystemAssigned"
         }
         if ($resource.IdentityType -match "UserAssigned") {
-            $userAssignedIdentities = ($resource.UserAssignedIdentities | ConvertFrom-Json).PSObject.Properties.Name
+            $userAssignedIdentities = ($resource.UserAssignedIdentities | ConvertFrom-Json).PSObject.Properties.Name |
+                ForEach-Object { $_ -replace [regex]::Escape($sourceSubscriptionId), $destinationSubscriptionId }
             Set-AzSqlServer -ResourceGroupName $rgName -ServerName $resource.ResourceName -AssignIdentity $userAssignedIdentities
         }
     }
