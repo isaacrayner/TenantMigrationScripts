@@ -1,63 +1,53 @@
-## DESCRIPTION: Exports full ARM templates and parameter files for each resource group to a
-##              local directory. Saves both a _template.json and _parameters.json per RG.
-## USAGE:       1. Update the tenant ID in Connect-AzAccount and the subscription ID in Set-AzContext.
-##              2. Update $outputDirectory to your desired local export path.
-##              3. Run in PowerShell with the Az module installed.
-. (Join-Path $PSScriptRoot ".\..\migration-params.ps1")
+<#
+.SYNOPSIS
+    Exports full ARM templates and parameter files for each resource group in the
+    source subscription to a structured local directory.
+.DESCRIPTION
+    Saves both a <RGName>_template.json and <RGName>_parameters.json per Resource Group.
+#>
 
-# Ensure Az module is up to date
-Connect-AzAccount -TenantId $sourceTenantId
-Set-AzContext -Subscription $sourceSubscriptionId
+$paramsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "migration-params.ps1"
+if (Test-Path $paramsPath) { . $paramsPath }
 
-# Set Output Directory
-$outputDirectory = "C:\CSPARMExports\Boxlight\RGExports"
+param(
+    [string]$SubscriptionId = $sourceSubscriptionId,
+    [string]$OutputDirectory = (Join-Path $backupRootDir "ARMExports/ResourceGroups")
+)
 
-# Log in to Azure
+Write-Host "=== Exporting ARM Resource Group Templates ===" -ForegroundColor Cyan
+Set-AzContext -Subscription $SubscriptionId -ErrorAction Stop | Out-Null
 
-# Validate Output Directory
-if (-not (Test-Path -Path $outputDirectory)) {
-    try {
-        New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
-        Write-Host "Output directory created: $outputDirectory" -ForegroundColor Green
-    } catch {
-        Write-Host "Failed to create output directory: $outputDirectory. Error: $_" -ForegroundColor Red
-        return
-    }
+if (-not (Test-Path -Path $OutputDirectory)) {
+    New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+    Write-Host "Created output directory: $OutputDirectory" -ForegroundColor Green
 }
 
-# Get all resource groups in the subscription
-$resourceGroups = Get-AzResourceGroup
+$resourceGroups = Get-AzResourceGroup -ErrorAction Stop
 
 foreach ($rg in $resourceGroups) {
-    Write-Host "Processing Resource Group: $($rg.ResourceGroupName)" -ForegroundColor Cyan
+    Write-Host "Processing Resource Group: $($rg.ResourceGroupName)..." -ForegroundColor Cyan
 
     try {
-        # Attempt to export the resource group template
-        $exportedTemplate = Export-AzResourceGroup -ResourceGroupName $rg.ResourceGroupName -IncludeParameterDefaultValue
+        $exportedTemplate = Export-AzResourceGroup -ResourceGroupName $rg.ResourceGroupName -IncludeParameterDefaultValue -ErrorAction Stop
 
-        if ($exportedTemplate -ne $null) {
-            # Check and save template
-            if ($exportedTemplate.template -ne $null) {
-                $templateFile = Join-Path -Path $outputDirectory -ChildPath "$($rg.ResourceGroupName)_template.json"
-                $exportedTemplate.template | ConvertTo-Json -Depth 10 | Out-File -FilePath $templateFile -Encoding utf8 -Force
-                Write-Host "Template saved to: $templateFile" -ForegroundColor Yellow
+        if ($null -ne $exportedTemplate) {
+            if ($null -ne $exportedTemplate.template) {
+                $templateFile = Join-Path -Path $OutputDirectory -ChildPath "$($rg.ResourceGroupName)_template.json"
+                $exportedTemplate.template | ConvertTo-Json -Depth 15 | Out-File -FilePath $templateFile -Encoding utf8 -Force
+                Write-Host "  Template saved: $templateFile" -ForegroundColor Green
             } else {
-                Write-Host "No template content for Resource Group: $($rg.ResourceGroupName)" -ForegroundColor Red
+                Write-Host "  No template content for Resource Group: $($rg.ResourceGroupName)" -ForegroundColor Yellow
             }
 
-            # Check and save parameters
-            if ($exportedTemplate.parameters -ne $null) {
-                $parameterFile = Join-Path -Path $outputDirectory -ChildPath "$($rg.ResourceGroupName)_parameters.json"
-                $exportedTemplate.parameters | ConvertTo-Json -Depth 10 | Out-File -FilePath $parameterFile -Encoding utf8 -Force
-                Write-Host "Parameters saved to: $parameterFile" -ForegroundColor Yellow
-            } else {
-                Write-Host "No parameter content for Resource Group: $($rg.ResourceGroupName)" -ForegroundColor Red
+            if ($null -ne $exportedTemplate.parameters) {
+                $parameterFile = Join-Path -Path $OutputDirectory -ChildPath "$($rg.ResourceGroupName)_parameters.json"
+                $exportedTemplate.parameters | ConvertTo-Json -Depth 15 | Out-File -FilePath $parameterFile -Encoding utf8 -Force
+                Write-Host "  Parameters saved: $parameterFile" -ForegroundColor Green
             }
-        } else {
-            Write-Host "Export-AzResourceGroup returned NULL for Resource Group: $($rg.ResourceGroupName)" -ForegroundColor Red
         }
-    }
-    catch {
-        Write-Host "Failed to export Resource Group: $($rg.ResourceGroupName). Error: $_" -ForegroundColor Red
+    } catch {
+        Write-Host "  Failed to export Resource Group $($rg.ResourceGroupName): $_" -ForegroundColor Red
     }
 }
+
+Write-Host "`nAll resource groups processed. Output directory: $OutputDirectory" -ForegroundColor Green

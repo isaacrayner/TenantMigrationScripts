@@ -1,27 +1,37 @@
-## DESCRIPTION: Removes all VNet peerings in the subscription. VNet peerings must be deleted
-##              before VNets can be migrated across tenants.
-## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
-##              2. Run 1.Export-VNETs.ps1 first to back up peering configurations.
-##              3. Run in PowerShell with the Az module installed.
-. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+<#
+.SYNOPSIS
+    Removes all Virtual Network Peerings in the source subscription.
+.DESCRIPTION
+    VNet peerings block subscription transfers and cross-subscription resource moves.
+    Run this after backing up peerings via 1.Export-VNETs.ps1.
+#>
 
-# Connect to Azure
-Connect-AzAccount
+$paramsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "migration-params.ps1"
+if (Test-Path $paramsPath) { . $paramsPath }
 
-# Set the Subscription (loaded from migration-params.ps1)
-$subscriptionId = $sourceSubscriptionId
-Select-AzSubscription -SubscriptionId $subscriptionId
+param(
+    [string]$SubscriptionId = $sourceSubscriptionId
+)
 
-# Get all Virtual Networks
-$vNets = Get-AzVirtualNetwork
+Write-Host "=== Deleting Virtual Network Peerings in Source Subscription ===" -ForegroundColor Cyan
+Set-AzContext -Subscription $SubscriptionId -ErrorAction Stop | Out-Null
 
-# Loop through each VNet and remove peerings
+$vNets = Get-AzVirtualNetwork -ErrorAction Stop
+$deletedCount = 0
+
 foreach ($vNet in $vNets) {
-    $peerings = $vNet.VirtualNetworkPeerings
-    foreach ($peering in $peerings) {
-        Remove-AzVirtualNetworkPeering -VirtualNetworkName $vNet.Name -ResourceGroupName $vNet.ResourceGroupName -Name $peering.Name -Force
-        Write-Output "Deleted Peering: $($peering.Name) from VNet: $($vNet.Name)"
+    if (-not $vNet.VirtualNetworkPeerings -or $vNet.VirtualNetworkPeerings.Count -eq 0) { continue }
+
+    foreach ($peering in $vNet.VirtualNetworkPeerings) {
+        Write-Host "Deleting Peering: '$($peering.Name)' on VNet '$($vNet.Name)' (RG: $($vNet.ResourceGroupName))..." -ForegroundColor Yellow
+        try {
+            Remove-AzVirtualNetworkPeering -VirtualNetworkName $vNet.Name -ResourceGroupName $vNet.ResourceGroupName -Name $peering.Name -Force -ErrorAction Stop
+            Write-Host "  ✅ Deleted Peering: $($peering.Name)" -ForegroundColor Green
+            $deletedCount++
+        } catch {
+            Write-Host "  ❌ Failed to delete Peering '$($peering.Name)': $_" -ForegroundColor Red
+        }
     }
 }
 
-Write-Output "All VNet peerings have been removed successfully!"
+Write-Host "`nAll VNet peerings processed. Total deleted: $deletedCount" -ForegroundColor Green

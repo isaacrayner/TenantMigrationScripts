@@ -1,57 +1,33 @@
-## DESCRIPTION: Exports SSH public keys from all resource groups in the source subscription
-##              and imports them into the same resource groups in the destination subscription.
-## USAGE:       1. Update OLD_SUBSCRIPTION_ID and NEW_SUBSCRIPTION_ID.
-##              2. Run in WSL/bash with Azure CLI and jq installed and authenticated.
-
 #!/bin/bash
+## DESCRIPTION: Exports SSH public keys from all resource groups in the source subscription
+##              to JSON backup files in migration-data/SSHKeys/.
+## USAGE:       Run in bash/WSL with Azure CLI and jq installed and authenticated.
+##              Restore in destination using 7-Recreation/7-RestoreSSHKeys.sh.
+
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/../migration-params.sh"
 
-# Variables come from migration-params.sh (OLD_SUBSCRIPTION_ID and NEW_SUBSCRIPTION_ID)
-# Login and set old subscription
-echo "Logging into old subscription..."
-#az login --only-show-errors > /dev/null
-az account set --subscription $OLD_SUBSCRIPTION_ID
+SSH_BACKUP_DIR="${BACKUP_ROOT_DIR}/SSHKeys"
+mkdir -p "$SSH_BACKUP_DIR"
 
-# Get all resource groups in the old subscription
-RESOURCE_GROUPS=$(az group list --subscription $OLD_SUBSCRIPTION_ID --query "[].name" -o json)
+echo "=== Backing up Azure SSH Public Keys ==="
+echo "Source Subscription: $SOURCE_SUBSCRIPTION_ID"
 
-if [ -z "$RESOURCE_GROUPS" ] || [ "$RESOURCE_GROUPS" == "[]" ]; then
-    echo "No resource groups found in the old subscription."
-    exit 1
+az account set --subscription "$SOURCE_SUBSCRIPTION_ID"
+
+ALL_KEYS=$(az sshkey list --subscription "$SOURCE_SUBSCRIPTION_ID" -o json)
+KEY_COUNT=$(echo "$ALL_KEYS" | jq length)
+
+if [[ "$KEY_COUNT" -eq 0 ]]; then
+    echo "No SSH keys found in subscription $SOURCE_SUBSCRIPTION_ID."
+    echo "[]" > "${SSH_BACKUP_DIR}/ssh_keys.json"
+    exit 0
 fi
 
-# Loop through each resource group and export SSH keys
-echo "Fetching SSH keys from all resource groups..."
-for RG in $(echo $RESOURCE_GROUPS | jq -r '.[]'); do
-    echo "Checking Resource Group: $RG"
+echo "Found $KEY_COUNT SSH key(s). Saving to ${SSH_BACKUP_DIR}/ssh_keys.json..."
+echo "$ALL_KEYS" > "${SSH_BACKUP_DIR}/ssh_keys.json"
 
-    # Get SSH keys in this resource group
-    SSH_KEYS=$(az sshkey list --resource-group "$RG" --subscription $OLD_SUBSCRIPTION_ID --query "[].{Name:name, PublicKey:publicKey}" -o json)
-
-    if [ -z "$SSH_KEYS" ] || [ "$SSH_KEYS" == "[]" ]; then
-        echo "  No SSH keys found in $RG."
-        continue
-    fi
-
-    # Save keys to a temporary file
-    echo "$SSH_KEYS" > ssh-keys-$RG.json
-
-    # Switch to new subscription
-    az account set --subscription $NEW_SUBSCRIPTION_ID
-
-    # Import SSH keys into the same resource group in the new subscription
-    echo "Importing SSH keys to resource group $RG in new subscription..."
-    cat ssh-keys-$RG.json | jq -c '.[]' | while read key; do
-        NAME=$(echo $key | jq -r '.Name')
-        PUBLIC_KEY=$(echo $key | jq -r '.PublicKey')
-
-        echo "  Creating SSH Key: $NAME"
-        az sshkey create --name "$NAME" --public-key "$PUBLIC_KEY" --resource-group "$RG" --subscription "$NEW_SUBSCRIPTION_ID" --only-show-errors
-    done
-
-    # Cleanup
-    rm -f ssh-keys-$RG.json
-done
-
-echo "SSH key migration completed successfully!"
+echo "✅ SSH Keys backed up successfully."
+echo "Restore in destination via 7-Recreation/7-RestoreSSHKeys.sh."

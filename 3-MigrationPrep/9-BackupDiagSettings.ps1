@@ -1,56 +1,54 @@
-## DESCRIPTION: Backs up diagnostic settings for supported Azure resource types to individual
-##              JSON files. Only processes resource types known to support diagnostic settings.
-## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
-##              2. Update $backupPath to your desired output directory.
-##              3. Add additional resource types to $supportedResourceTypes as needed.
-##              4. Run in PowerShell with the Az module installed.
-. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+<#
+.SYNOPSIS
+    Backs up Azure Monitor Diagnostic Settings for all resources in the subscription.
+.DESCRIPTION
+    Exports diagnostic settings (Logs, Metrics, Log Analytics Workspace, Storage Account,
+    Event Hub) to JSON files in migration-data/DiagnosticSettings/.
+#>
 
-Set-AzContext -Subscription $sourceSubscriptionId
+$paramsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "migration-params.ps1"
+if (Test-Path $paramsPath) { . $paramsPath }
 
-# Set Backup Path
-$backupPath = "C:\temp\AzureDiagnosticsBackup\"
-if (!(Test-Path -Path $backupPath)) {
-    New-Item -ItemType Directory -Path $backupPath
-}
-
-# Get all resources in the subscription
-$resources = Get-AzResource
-
-# List of resource types that support diagnostic settings
-$supportedResourceTypes = @(
-    "Microsoft.Compute/virtualMachines",
-    "Microsoft.Storage/storageAccounts",
-    "Microsoft.Network/networkSecurityGroups",
-    "Microsoft.Network/loadBalancers",
-    "Microsoft.KeyVault/vaults",
-    "Microsoft.ContainerService/managedClusters",
-    "Microsoft.Sql/servers",
-    "Microsoft.Sql/servers/databases",
-    "Microsoft.Web/sites",
-    "Microsoft.EventHub/namespaces",
-    "Microsoft.ServiceBus/namespaces",
-    "Microsoft.Logic/workflows"
-    # Add more types as needed
+param(
+    [string]$SubscriptionId = $sourceSubscriptionId,
+    [string]$BackupDir      = (Join-Path $backupRootDir "DiagnosticSettings")
 )
 
-# Loop through each resource and backup diagnostic settings
-foreach ($resource in $resources) {
-    if ($supportedResourceTypes -contains $resource.ResourceType) {
-        try {
-            $diagSettings = Get-AzDiagnosticSetting -ResourceId $resource.Id
-            if ($diagSettings) {
-                $fileName = $backupPath + ($resource.Name -replace '[^a-zA-Z0-9]', '_') + "_DiagnosticSettings.json"
-                $diagSettings | ConvertTo-Json -Depth 10 | Out-File -FilePath $fileName
-                Write-Output "Backup saved for $($resource.Name)"
+Write-Host "=== Backing up Diagnostic Settings ===" -ForegroundColor Cyan
+Set-AzContext -Subscription $SubscriptionId -ErrorAction Stop | Out-Null
+
+if (-not (Test-Path -Path $BackupDir)) {
+    New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
+}
+
+$resources = Get-AzResource -ErrorAction Stop
+Write-Host "Checking $($resources.Count) resources for diagnostic settings..." -ForegroundColor Cyan
+
+$backedUpCount = 0
+
+foreach ($res in $resources) {
+    try {
+        $diag = Get-AzDiagnosticSetting -ResourceId $res.Id -ErrorAction SilentlyContinue
+        if ($diag) {
+            $safeName = ($res.Name -replace '[^a-zA-Z0-9_\-\.]', '_')
+            $fileName = Join-Path $BackupDir "${safeName}_diag.json"
+
+            $exportData = @{
+                ResourceId                 = $res.Id
+                ResourceName               = $res.Name
+                ResourceType               = $res.ResourceType
+                ResourceGroupName          = $res.ResourceGroupName
+                DiagnosticSettings         = $diag
             }
-        } catch {
-            Write-Output "Skipped: $($resource.Name) does not support diagnostic settings."
+
+            $exportData | ConvertTo-Json -Depth 10 | Out-File -FilePath $fileName -Encoding utf8
+            Write-Host "  ✅ Saved diagnostic settings for: $($res.Name)" -ForegroundColor Green
+            $backedUpCount++
         }
-    } else {
-        Write-Output "Skipped: $($resource.Name) is not in the supported resource list."
+    } catch {
+        # Resource does not support diagnostic settings - continue
     }
 }
 
-Write-Output "Backup completed!"
-
+Write-Host "`nDiagnostic settings backup complete! Total backed up: $backedUpCount" -ForegroundColor Green
+Write-Host "Output directory: $BackupDir" -ForegroundColor Cyan

@@ -1,117 +1,107 @@
-## DESCRIPTION: Deletes miscellaneous resources that must be removed before tenant migration:
-##              disk snapshots, VPN gateway connections/gateways/local gateways, NAT gateways,
-##              and Application Gateways. Run each section selectively as needed.
-## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
-##              2. Review and update resource group names and resource names in each section.
-##              3. Run sections individually in PowerShell with the Az module installed.
-. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+<#
+.SYNOPSIS
+    Cleans up miscellaneous resources that block subscription or tenant migration.
+.DESCRIPTION
+    Sections can be executed selectively via parameters:
+    - Snapshots: Disk snapshots block VM moves.
+    - NatGateways: Must be disassociated from subnets before deletion.
+    - VpnGateways: Virtual Network Gateways and connections.
+    - AppGateways: Application Gateways (ensure backup was run first).
+#>
 
-#########
-# Set the Context
-#########
+$paramsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "migration-params.ps1"
+if (Test-Path $paramsPath) { . $paramsPath }
 
-Set-AzContext -Subscription $sourceSubscriptionId
+param(
+    [string]$SubscriptionId = $sourceSubscriptionId,
+    [switch]$Snapshots,
+    [switch]$NatGateways,
+    [switch]$VpnGateways,
+    [switch]$AppGateways,
+    [switch]$All
+)
 
-#########
-# Delete All Snapshots
-#########
+Write-Host "=== Miscellaneous Migration Deletions & Cleanups ===" -ForegroundColor Cyan
+Set-AzContext -Subscription $SubscriptionId -ErrorAction Stop | Out-Null
 
-# Set your subscription (if you have multiple)
-Set-AzContext -SubscriptionId "<Your-Subscription-ID>"
+if (-not ($Snapshots -or $NatGateways -or $VpnGateways -or $AppGateways -or $All)) {
+    Write-Host "No cleanup flags specified." -ForegroundColor Yellow
+    Write-Host "Usage: .\2-Misc.ps1 -Snapshots [-NatGateways] [-VpnGateways] [-AppGateways] [-All]" -ForegroundColor Cyan
+    $prompt = Read-Host "Choose what to clean up: [1] Snapshots [2] NAT Gateways [3] VPN Gateways [4] App Gateways [5] All"
+    switch ($prompt) {
+        "1" { $Snapshots = $true }
+        "2" { $NatGateways = $true }
+        "3" { $VpnGateways = $true }
+        "4" { $AppGateways = $true }
+        "5" { $All = $true }
+        Default { Write-Host "Cancelled."; exit 0 }
+    }
+}
 
-# Get all snapshots in the subscription
-$snapshots = Get-AzSnapshot
-
-if ($snapshots.Count -eq 0) {
-    Write-Output "No snapshots found in the subscription."
-} else {
-    foreach ($snapshot in $snapshots) {
-        try {
-            Write-Output "Deleting snapshot: $($snapshot.Name) in resource group: $($snapshot.ResourceGroupName)"
-            Remove-AzSnapshot -ResourceGroupName $snapshot.ResourceGroupName -SnapshotName $snapshot.Name -Force
-            Write-Output "Deleted snapshot: $($snapshot.Name)"
-        } catch {
-            Write-Output "Failed to delete snapshot: $($snapshot.Name). Error: $_"
+# 1. Snapshots
+if ($Snapshots -or $All) {
+    Write-Host "`n--- Cleaning Disk Snapshots ---" -ForegroundColor Cyan
+    $snapshots = Get-AzSnapshot -ErrorAction SilentlyContinue
+    if (-not $snapshots -or $snapshots.Count -eq 0) {
+        Write-Host "No disk snapshots found." -ForegroundColor Green
+    } else {
+        foreach ($snap in $snapshots) {
+            Write-Host "Deleting Snapshot '$($snap.Name)' in RG '$($snap.ResourceGroupName)'..." -ForegroundColor Yellow
+            Remove-AzSnapshot -ResourceGroupName $snap.ResourceGroupName -SnapshotName $snap.Name -Force -ErrorAction SilentlyContinue | Out-Null
+            Write-Host "  ✅ Deleted: $($snap.Name)" -ForegroundColor Green
         }
     }
-
-    Write-Output "All snapshots have been processed."
 }
 
-#########
-# Delete VPN Gateway
-#########
-
-# Define variables
-$resourceGroupName = "vpn-gateway"
-$vpnGatewayName = "boxlight-vpn-gw"
-$localGatewayName = "<Your-Local-Network-Gateway-Name>"
-
-# Step 1: Delete VPN Connections
-$connections = Get-AzVirtualNetworkGatewayConnection -ResourceGroupName $resourceGroupName
-foreach ($connection in $connections) {
-    Write-Output "Deleting VPN Connection: $($connection.Name)"
-    Remove-AzVirtualNetworkGatewayConnection -ResourceGroupName $resourceGroupName -Name $connection.Name -Force
-    Write-Output "Deleted VPN Connection: $($connection.Name)"
-}
-
-# Step 2: Delete VPN Gateway
-Write-Output "Deleting VPN Gateway: $vpnGatewayName"
-Remove-AzVirtualNetworkGateway -ResourceGroupName $resourceGroupName -Name $vpnGatewayName -Force
-Write-Output "VPN Gateway $vpnGatewayName deleted successfully."
-
-# Step 3: Delete Local Network Gateway (Optional)
-if ($localGatewayName -ne "") {
-    Write-Output "Deleting Local Network Gateway: $localGatewayName"
-    Remove-AzLocalNetworkGateway -ResourceGroupName $resourceGroupName -Name $localGatewayName -Force
-    Write-Output "Local Network Gateway $localGatewayName deleted successfully."
-}
-
-Write-Output "All VPN resources have been deleted."
-
-#########
-# Delete NAT Gateway
-#########
-# Get all NAT Gateways in the subscription
-$natGateways = Get-AzNatGateway
-
-if ($natGateways.Count -eq 0) {
-    Write-Output "No NAT Gateways found in the subscription."
-} else {
-    foreach ($natGateway in $natGateways) {
-        try {
-            Write-Output "Deleting NAT Gateway: $($natGateway.Name) in resource group: $($natGateway.ResourceGroupName)"
-            Remove-AzNatGateway -ResourceGroupName $natGateway.ResourceGroupName -NatGatewayName $natGateway.Name -Force
-            Write-Output "Deleted NAT Gateway: $($natGateway.Name)"
-        } catch {
-            Write-Output "Failed to delete NAT Gateway: $($natGateway.Name). Error: $_"
-        }
+# 2. NAT Gateways
+if ($NatGateways -or $All) {
+    Write-Host "`n--- Cleaning NAT Gateways ---" -ForegroundColor Cyan
+    # First disassociate from any subnets
+    $subnetsWithNat = Get-AzVirtualNetwork | ForEach-Object { $_.Subnets } | Where-Object { $_.NatGateway -ne $null }
+    foreach ($subnet in $subnetsWithNat) {
+        Write-Host "Disassociating NAT Gateway from subnet: $($subnet.Name)..." -ForegroundColor Yellow
+        $vnet = Get-AzVirtualNetwork -ResourceGroupName ($subnet.Id -split "/")[4] -Name ($subnet.Id -split "/")[8]
+        $subObj = $vnet.Subnets | Where-Object { $_.Name -eq $subnet.Name }
+        $subObj.NatGateway = $null
+        $vnet | Set-AzVirtualNetwork -ErrorAction SilentlyContinue | Out-Null
+        Write-Host "  ✅ Disassociated NAT Gateway from $($subnet.Name)" -ForegroundColor Green
     }
 
-    Write-Output "All NAT Gateways have been processed."
+    $natGateways = Get-AzNatGateway -ErrorAction SilentlyContinue
+    foreach ($nat in $natGateways) {
+        Write-Host "Deleting NAT Gateway '$($nat.Name)' in RG '$($nat.ResourceGroupName)'..." -ForegroundColor Yellow
+        Remove-AzNatGateway -ResourceGroupName $nat.ResourceGroupName -NatGatewayName $nat.Name -Force -ErrorAction SilentlyContinue | Out-Null
+        Write-Host "  ✅ Deleted: $($nat.Name)" -ForegroundColor Green
+    }
 }
 
-
-#########
-# Delete Application Gateways
-#########
-# Get all Application Gateways in the subscription
-$appGateways = Get-AzApplicationGateway
-
-if ($appGateways.Count -eq 0) {
-    Write-Output "No Application Gateways found in the subscription."
-} else {
-    foreach ($appGateway in $appGateways) {
-        try {
-            Write-Output "Deleting Application Gateway: $($appGateway.Name) in resource group: $($appGateway.ResourceGroupName)"
-            Remove-AzApplicationGateway -ResourceGroupName $appGateway.ResourceGroupName -Name $appGateway.Name -Force
-            Write-Output "Deleted Application Gateway: $($appGateway.Name)"
-        } catch {
-            Write-Output "Failed to delete Application Gateway: $($appGateway.Name). Error: $_"
-        }
+# 3. VPN Gateways
+if ($VpnGateways -or $All) {
+    Write-Host "`n--- Cleaning VPN Gateway Connections & Gateways ---" -ForegroundColor Cyan
+    $connections = Get-AzVirtualNetworkGatewayConnection -ErrorAction SilentlyContinue
+    foreach ($conn in $connections) {
+        Write-Host "Deleting VPN Connection '$($conn.Name)' in RG '$($conn.ResourceGroupName)'..." -ForegroundColor Yellow
+        Remove-AzVirtualNetworkGatewayConnection -ResourceGroupName $conn.ResourceGroupName -Name $conn.Name -Force -ErrorAction SilentlyContinue | Out-Null
+        Write-Host "  ✅ Deleted Connection: $($conn.Name)" -ForegroundColor Green
     }
 
-    Write-Output "All Application Gateways have been processed."
+    $vnetGateways = Get-AzVirtualNetworkGateway -ErrorAction SilentlyContinue
+    foreach ($gw in $vnetGateways) {
+        Write-Host "Deleting Virtual Network Gateway '$($gw.Name)' in RG '$($gw.ResourceGroupName)'..." -ForegroundColor Yellow
+        Remove-AzVirtualNetworkGateway -ResourceGroupName $gw.ResourceGroupName -Name $gw.Name -Force -ErrorAction SilentlyContinue | Out-Null
+        Write-Host "  ✅ Deleted Gateway: $($gw.Name)" -ForegroundColor Green
+    }
 }
 
+# 4. Application Gateways
+if ($AppGateways -or $All) {
+    Write-Host "`n--- Cleaning Application Gateways ---" -ForegroundColor Cyan
+    $appGateways = Get-AzApplicationGateway -ErrorAction SilentlyContinue
+    foreach ($appGw in $appGateways) {
+        Write-Host "Deleting Application Gateway '$($appGw.Name)' in RG '$($appGw.ResourceGroupName)'..." -ForegroundColor Yellow
+        Remove-AzApplicationGateway -ResourceGroupName $appGw.ResourceGroupName -Name $appGw.Name -Force -ErrorAction SilentlyContinue | Out-Null
+        Write-Host "  ✅ Deleted App Gateway: $($appGw.Name)" -ForegroundColor Green
+    }
+}
 
+Write-Host "`nSelected cleanup operations completed." -ForegroundColor Green

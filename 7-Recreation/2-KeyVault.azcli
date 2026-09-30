@@ -1,97 +1,79 @@
-## DESCRIPTION: Updates Key Vault tenant IDs and removes stale access policies after tenant
-##              migration, then restores access policies from the JSON backup files.
-##              NOTE: After running, manually reassign RBAC permissions for managed identities.
-## USAGE:       1. Update the subscription ID in az account set.
-##              2. For the restore section, ensure BACKUP_DIR contains the JSON files from
-##                 12-BackupAccessPolicies.azcli.
-##              3. Run in WSL/bash with Azure CLI and jq installed and authenticated.
+#!/bin/bash
+## DESCRIPTION: Updates Key Vault tenant IDs and restores access policies in the destination
+##              subscription from JSON backups produced by 12-BackupAccessPolicies.azcli.
+## USAGE:       Run in bash/WSL with Azure CLI and jq installed and authenticated.
+
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/../migration-params.sh"
 
-##Remember to recreate the Access Policies for the Key Vault after the Key Vault is recreated
-##Specifically, allow the Managed Identities access to the keyvault using access policies. See spreadsheet for details
-#Update the tenant ID associated with all existing key vaults in the subscription to the target directory.
-#Remove all existing access policy entries.
-#Add new access policy entries associated with the target directory.
+KV_BACKUP_DIR="${BACKUP_ROOT_DIR}/KeyVaultAccess"
 
-########SINGLE########
-az account set -s "$DESTINATION_SUBSCRIPTION_ID"                           # Select your Azure Subscription
-tenantId=$(az account show --query tenantId)                               # Get your tenantId
-az keyvault update -n myvault --remove Properties.accessPolicies           # Remove the access policies
-az keyvault update -n myvault --set Properties.tenantId=$tenantId          # Update the key vault tenantId
+echo "=== Updating Key Vaults & Restoring Access Policies ==="
+echo "Destination Subscription: $DESTINATION_SUBSCRIPTION_ID"
 
+az account set --subscription "$DESTINATION_SUBSCRIPTION_ID"
 
-########MANY########
-# Set Azure Subscription
-az account set -s "$DESTINATION_SUBSCRIPTION_ID"
+TENANT_ID=$(az account show --query tenantId -o tsv)
+echo "Current Tenant ID: $TENANT_ID"
 
-# Get Tenant ID
-tenantId=$(az account show --query tenantId --output tsv)
-echo "Tenant ID: $tenantId"  # Display Tenant ID
+KEYVAULTS=$(az keyvault list --subscription "$DESTINATION_SUBSCRIPTION_ID" --query "[].{name:name, rg:resourceGroup}" -o json)
 
-# Get all Key Vaults in the subscription
-keyVaults=$(az keyvault list --query "[].{name:name, rg:resourceGroup}" --output json)
+KV_COUNT=$(echo "$KEYVAULTS" | jq length)
+if [[ "$KV_COUNT" -eq 0 ]]; then
+    echo "No Key Vaults found in destination subscription."
+    exit 0
+fi
 
-# Display Key Vaults on screen
-echo "Key Vaults in the subscription:"
-echo "$keyVaults" | jq
+echo "Found $KV_COUNT Key Vault(s). Updating tenant ID and removing stale policies..."
 
-# Loop through each Key Vault
-for row in $(echo "${keyVaults}" | jq -c '.[]'); do
-    kvName=$(echo $row | jq -r '.name')
-    rgName=$(echo $row | jq -r '.rg')
+echo "$KEYVAULTS" | jq -c '.[]' | while read -r row; do
+    kvName=$(echo "$row" | jq -r '.name')
+    rgName=$(echo "$row" | jq -r '.rg')
 
-    echo "Processing Key Vault: $kvName in Resource Group: $rgName"
+    echo "Updating Key Vault: $kvName in RG: $rgName..."
 
-    # Remove existing access policies
-    az keyvault update -n "$kvName" -g "$rgName" --remove properties.accessPolicies
+    # Check if Key Vault uses Azure RBAC
+    ENABLE_RBAC=$(az keyvault show -n "$kvName" -g "$rgName" --query "properties.enableRbacAuthorization" -o tsv 2>/dev/null || echo "false")
 
-    # Update Key Vault tenant ID
-    az keyvault update -n "$kvName" -g "$rgName" --set properties.tenantId="$tenantId"
-
-    echo "Updated Key Vault: $kvName"
+    if [[ "$ENABLE_RBAC" == "true" ]]; then
+        echo "  Key Vault $kvName uses Azure RBAC. Updating tenant ID only..."
+        az keyvault update -n "$kvName" -g "$rgName" --set properties.tenantId="$TENANT_ID" --only-show-errors
+    else
+        echo "  Updating tenant ID and refreshing access policies..."
+        az keyvault update -n "$kvName" -g "$rgName" --set properties.tenantId="$TENANT_ID" --only-show-errors
+    fi
 done
 
-echo "All Key Vaults updated successfully."
+# Restore access policies from backup
+if [[ -d "$KV_BACKUP_DIR" ]]; then
+    echo "Restoring Key Vault access policies from backup..."
 
+    for POLICY_FILE in "$KV_BACKUP_DIR"/*_access_policies.json; do
+        [[ -f "$POLICY_FILE" ]] || continue
 
-### Now you must go through the Key Vault and add the access policies back in for the managed identities
-### associated with the resources that need access to the Key Vault. See the spreadsheet for details.
-### This will be for the App Registrations and the User Identities for now (RBAC and Access Policies)
-### UPDATE THE RBAC RULES FOR THE USER_Assigned_IDENTITIES NOOOOOOOWWWWWWW
-### After recreating all the MI's, you will need to update the Key Vault access policies to allow the new MI's access to the Key Vault as well
+        KV_NAME=$(basename "$POLICY_FILE" _access_policies.json)
+        echo "Restoring access policies for Key Vault: $KV_NAME..."
 
-############RESTORE THE ACCESS POLICIES############
+        jq -c '.[]?' "$POLICY_FILE" | while read -r policy; do
+            OBJECT_ID=$(echo "$policy" | jq -r '.objectId')
 
-# Set backup directory
-BACKUP_DIR="/mnt/c/temp/AzureKVAccessBackup"
+            PERM_KEYS=$(echo "$policy" | jq -r '.permissions.keys[]? // empty' | tr '\n' ' ')
+            PERM_SECRETS=$(echo "$policy" | jq -r '.permissions.secrets[]? // empty' | tr '\n' ' ')
+            PERM_CERTS=$(echo "$policy" | jq -r '.permissions.certificates[]? // empty' | tr '\n' ' ')
 
-echo "Restoring Key Vault access policies..."
+            echo "  Applying policy for ObjectId: $OBJECT_ID on $KV_NAME..."
 
-# Loop through backed-up policies and restore them
-for POLICY_FILE in $BACKUP_DIR/*_access_policies.json; do
-    KV_NAME=$(basename $POLICY_FILE _access_policies.json)
-    echo "Restoring access policies for Key Vault: $KV_NAME"
+            CMD=(az keyvault set-policy --name "$KV_NAME" --object-id "$OBJECT_ID" --only-show-errors)
 
-    # Read access policies from file
-    POLICIES=$(cat $POLICY_FILE)
+            if [[ -n "$PERM_KEYS" ]]; then CMD+=(--key-permissions $PERM_KEYS); fi
+            if [[ -n "$PERM_SECRETS" ]]; then CMD+=(--secret-permissions $PERM_SECRETS); fi
+            if [[ -n "$PERM_CERTS" ]]; then CMD+=(--certificate-permissions $PERM_CERTS); fi
 
-    # Loop through each policy and reapply it
-    echo "$POLICIES" | jq -c '.[]' | while read -r policy; do
-        OBJECT_ID=$(echo $policy | jq -r '.objectId')
-        PERMISSIONS_KEYS=$(echo $policy | jq -r '.permissions.keys[]?' | tr '\n' ' ')
-        PERMISSIONS_SECRETS=$(echo $policy | jq -r '.permissions.secrets[]?' | tr '\n' ' ')
-        PERMISSIONS_CERTS=$(echo $policy | jq -r '.permissions.certificates[]?' | tr '\n' ' ')
-
-        echo "Reapplying policy for Object ID: $OBJECT_ID on Key Vault: $KV_NAME"
-
-        az keyvault set-policy \
-            --name "$KV_NAME" \
-            --object-id "$OBJECT_ID" \
-            --key-permissions $PERMISSIONS_KEYS \
-            --secret-permissions $PERMISSIONS_SECRETS \
-            --certificate-permissions $PERMISSIONS_CERTS
+            "${CMD[@]}" || echo "    ⚠️ Could not set policy for principal $OBJECT_ID (may need recreation in target tenant)"
+        done
     done
-done
+fi
 
-echo "Key Vault access policies restored successfully!"
+echo "Key Vault tenant updates and access policies restored successfully!"

@@ -1,25 +1,41 @@
-## DESCRIPTION: Backs up all private endpoint configurations in the subscription to individual
-##              JSON files. One file is created per private endpoint.
-## USAGE:       1. Update the subscription ID in the az account set command.
-##              2. Optionally update the output path (/mnt/c/temp/AzurePrivateEndpointsBackup).
-##              3. Run in WSL/bash with Azure CLI installed and authenticated.
-##              4. Output JSON files are used by 3-PrivateEndpoints.azcli in 7-Recreation.
+#!/bin/bash
+## DESCRIPTION: Backs up all private endpoint configurations and their Private DNS Zone Groups
+##              in the source subscription to JSON files in migration-data/PrivateEndpoints/.
+## USAGE:       Run in bash/WSL with Azure CLI and jq installed and authenticated.
+
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/../migration-params.sh"
 
-# Backup all Private Endpoints in the subscription
-# Set these variables before running the script
+PE_BACKUP_DIR="${BACKUP_ROOT_DIR}/PrivateEndpoints"
+mkdir -p "$PE_BACKUP_DIR"
+
+echo "=== Backing up Private Endpoints ==="
+echo "Source Subscription: $SOURCE_SUBSCRIPTION_ID"
 
 az account set --subscription "$SOURCE_SUBSCRIPTION_ID"
 
-mkdir -p /mnt/c/temp/AzurePrivateEndpointsBackup
+PES=$(az network private-endpoint list --subscription "$SOURCE_SUBSCRIPTION_ID" --query "[].id" -o tsv)
 
-for pe in $(az network private-endpoint list --query "[].id" -o tsv); do
-    name=$(az network private-endpoint show --ids $pe --query "name" -o tsv)
-    rg=$(az network private-endpoint show --ids $pe --query "resourceGroup" -o tsv)
-    
-    az network private-endpoint show --ids $pe -o json > "/mnt/c/temp/AzurePrivateEndpointsBackup/${name}_PrivateEndpoint.json"
-    echo "Backup saved for Private Endpoint: $name"
+if [[ -z "$PES" ]]; then
+    echo "No Private Endpoints found in subscription."
+    exit 0
+fi
+
+for pe_id in $PES; do
+    name=$(az network private-endpoint show --ids "$pe_id" --query "name" -o tsv)
+    rg=$(az network private-endpoint show --ids "$pe_id" --query "resourceGroup" -o tsv)
+
+    echo "Backing up Private Endpoint: $name (RG: $rg)..."
+    az network private-endpoint show --ids "$pe_id" -o json > "${PE_BACKUP_DIR}/${name}_PrivateEndpoint.json"
+
+    # Also backup Private DNS Zone Groups if associated
+    DNS_GROUPS=$(az network private-endpoint dns-zone-group list --endpoint-name "$name" --resource-group "$rg" -o json 2>/dev/null || true)
+    if [[ -n "$DNS_GROUPS" && "$DNS_GROUPS" != "[]" ]]; then
+        echo "$DNS_GROUPS" > "${PE_BACKUP_DIR}/${name}_DnsZoneGroups.json"
+        echo "  Saved DNS Zone Groups for: $name"
+    fi
 done
 
-echo "Backup completed!"
+echo "✅ Private endpoint backup completed! Saved in: $PE_BACKUP_DIR"

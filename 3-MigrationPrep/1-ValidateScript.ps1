@@ -1,22 +1,68 @@
-## DESCRIPTION: Validates that specified resources can be moved between two resource groups using
-##              Azure's validateMoveResources API. Run this before executing any resource moves
-##              to catch compatibility issues early.
-## USAGE:       1. Set $sourceName and $destinationName to the source and destination RG names.
-##              2. Set $resourcesToMove to an array of resource names to validate.
-##              3. Run in PowerShell with the Az module installed. Review output for errors.
+<#
+.SYNOPSIS
+    Validates resource move readiness using the ARM validateMoveResources API.
+.DESCRIPTION
+    Validates either a specific list of resources or an entire Resource Group
+    before moving resources across resource groups or subscriptions.
+#>
 
-# Script to check resources in preparation for the move
+$paramsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "migration-params.ps1"
+if (Test-Path $paramsPath) { . $paramsPath }
 
-$sourceName = "sourceRG"
-$destinationName = "destinationRG"
-$resourcesToMove = @("app1", "app2")
+param(
+    [Parameter(Mandatory=$true)][string]$SourceResourceGroup,
+    [string]$DestinationResourceGroup = $SourceResourceGroup,
+    [string]$TargetSubscriptionId     = $destinationSubscriptionId,
+    [string[]]$ResourceNames          = @()
+)
 
-$sourceResourceGroup = Get-AzResourceGroup -Name $sourceName
-$destinationResourceGroup = Get-AzResourceGroup -Name $destinationName
+Write-Host "=== Validating Resource Move ===" -ForegroundColor Cyan
+Write-Host "Source RG: $SourceResourceGroup"
+Write-Host "Target RG: $DestinationResourceGroup (Sub: $TargetSubscriptionId)"
 
-$resources = Get-AzResource -ResourceGroupName $sourceName | Where-Object { $_.Name -in $resourcesToMove }
+Set-AzContext -Subscription $sourceSubscriptionId -ErrorAction Stop | Out-Null
 
-Invoke-AzResourceAction -Action validateMoveResources -ResourceId $sourceResourceGroup.ResourceId -Parameters @{
-      resources = $resources.ResourceId;  # Wrap in an @() array if providing a single resource ID string.
-      targetResourceGroup = $destinationResourceGroup.ResourceId
-   }
+$srcRG = Get-AzResourceGroup -Name $SourceResourceGroup -ErrorAction Stop
+
+if ($ResourceNames.Count -gt 0) {
+    $resources = Get-AzResource -ResourceGroupName $SourceResourceGroup | Where-Object { $_.Name -in $ResourceNames }
+} else {
+    $resources = Get-AzResource -ResourceGroupName $SourceResourceGroup
+}
+
+if (-not $resources -or $resources.Count -eq 0) {
+    Write-Host "No resources found to validate." -ForegroundColor Yellow
+    exit 0
+}
+
+Write-Host "Found $($resources.Count) resource(s) to validate." -ForegroundColor Cyan
+
+$destinationRGId = "/subscriptions/$TargetSubscriptionId/resourceGroups/$DestinationResourceGroup"
+
+try {
+    Write-Host "Invoking validateMoveResources (this may take 30-60 seconds)..." -ForegroundColor Cyan
+    $result = Invoke-AzResourceAction `
+        -Action "validateMoveResources" `
+        -ResourceId $srcRG.ResourceId `
+        -Parameters @{
+            resources           = [string[]]$resources.ResourceId
+            targetResourceGroup = $destinationRGId
+        } `
+        -Force `
+        -ErrorAction Stop
+
+    Write-Host "`n✅ Validation PASSED! Resources are ready to move." -ForegroundColor Green
+} catch {
+    Write-Host "`n❌ Validation FAILED:" -ForegroundColor Red
+    Write-Host $_.Exception.Message -ForegroundColor Red
+
+    if ($_.ErrorDetails.Message) {
+        Write-Host "`nARM Error Details:" -ForegroundColor Yellow
+        try {
+            $_.ErrorDetails.Message | ConvertFrom-Json | ConvertTo-Json -Depth 10 | Write-Host
+        } catch {
+            Write-Host $_.ErrorDetails.Message
+        }
+    }
+    exit 1
+}

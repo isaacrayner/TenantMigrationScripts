@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Azure Migration Orchestration Dashboard</title>
+    <style>
+        :root {
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-card: #334155;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent: #38bdf8;
+            --accent-hover: #0ea5e9;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --border: #475569;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            padding: 24px;
+            line-height: 1.5;
+        }
+
+        header {
+            margin-bottom: 32px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--accent);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .scenario-selector {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            padding: 8px 16px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .scenario-selector select {
+            background: var(--bg-primary);
+            color: var(--accent);
+            border: 1px solid var(--border);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .stepper-container {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 32px;
+            overflow-x: auto;
+            padding-bottom: 12px;
+        }
+
+        .step-pill {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            padding: 12px 18px;
+            border-radius: 8px;
+            flex: 1;
+            min-width: 140px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-align: center;
+        }
+
+        .step-pill:hover, .step-pill.active {
+            border-color: var(--accent);
+            background: #1e3a5f;
+        }
+
+        .step-pill .step-num {
+            font-size: 12px;
+            text-transform: uppercase;
+            font-weight: 700;
+            color: var(--accent);
+            margin-bottom: 4px;
+        }
+
+        .step-pill .step-name {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 24px;
+        }
+
+        @media (max-width: 992px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 24px;
+        }
+
+        .card-header {
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            color: var(--accent);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .script-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .script-item {
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            padding: 16px;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .script-meta h4 {
+            font-size: 15px;
+            font-weight: 600;
+            color: #e2e8f0;
+            margin-bottom: 4px;
+        }
+
+        .script-meta p {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .script-path {
+            font-family: monospace;
+            font-size: 12px;
+            color: var(--accent);
+            background: rgba(56, 189, 248, 0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+            display: inline-block;
+            margin-top: 6px;
+        }
+
+        .copy-btn {
+            background: var(--bg-card);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .copy-btn:hover {
+            background: var(--accent);
+            color: var(--bg-primary);
+            border-color: var(--accent);
+        }
+
+        .checklist-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 14px;
+        }
+
+        .checklist-item input[type="checkbox"] {
+            margin-top: 4px;
+            cursor: pointer;
+            accent-color: var(--accent);
+            width: 16px;
+            height: 16px;
+        }
+
+        .notice-box {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid var(--warning);
+            padding: 14px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: #fde68a;
+        }
+
+        .notice-box.info {
+            background: rgba(56, 189, 248, 0.1);
+            border-color: var(--accent);
+            color: #bae6fd;
+        }
+
+        .badge {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            padding: 3px 8px;
+            border-radius: 4px;
+            display: inline-block;
+        }
+
+        .badge-ps {
+            background: #1d4ed8;
+            color: white;
+        }
+
+        .badge-bash {
+            background: #047857;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div>
+        <h1>⚡ Azure Migration Orchestrator Dashboard</h1>
+        <p style="color: var(--text-secondary); font-size: 14px; margin-top: 4px;">
+            Interactive runbook, script selector, and execution guide for Subscription & Tenant migrations.
+        </p>
+    </div>
+    <div class="scenario-selector">
+        <label for="scenarioSelect" style="font-size: 13px; font-weight: 600;">Migration Archetype:</label>
+        <select id="scenarioSelect" onchange="renderPhase()">
+            <option value="same-tenant">Scenario A: Same-Tenant Sub-to-Sub (ARM Move)</option>
+            <option value="cross-tenant">Scenario B: Cross-Tenant Directory Transfer</option>
+        </select>
+    </div>
+</header>
+
+<div class="stepper-container">
+    <div class="step-pill active" onclick="selectStep('P')">
+        <div class="step-num">Phase P</div>
+        <div class="step-name">Planning & RBAC</div>
+    </div>
+    <div class="step-pill" onclick="selectStep('0')">
+        <div class="step-num">Phase 0</div>
+        <div class="step-name">Blocker Scan</div>
+    </div>
+    <div class="step-pill" onclick="selectStep('1')">
+        <div class="step-num">Phase 1</div>
+        <div class="step-name">Prep Target</div>
+    </div>
+    <div class="step-pill" onclick="selectStep('2')">
+        <div class="step-num">Phase 2</div>
+        <div class="step-name">Full Backup</div>
+    </div>
+    <div class="step-pill" onclick="selectStep('3')">
+        <div class="step-num">Phase 3</div>
+        <div class="step-name">Clean & Detach</div>
+    </div>
+    <div class="step-pill" onclick="selectStep('4')">
+        <div class="step-num">Phase 4</div>
+        <div class="step-name">Execution</div>
+    </div>
+    <div class="step-pill" onclick="selectStep('5')">
+        <div class="step-num">Phase 5</div>
+        <div class="step-name">Restore & Remap</div>
+    </div>
+    <div class="step-pill" onclick="selectStep('6')">
+        <div class="step-num">Phase 6</div>
+        <div class="step-name">Verify</div>
+    </div>
+</div>
+
+<div class="dashboard-grid">
+    <div>
+        <div class="card">
+            <div class="card-header">
+                <span id="phaseTitle">Phase P: Planning & Permission Assessment</span>
+                <span id="phaseBadge" class="badge badge-ps">4 Scripts</span>
+            </div>
+            <div id="phaseNotice" class="notice-box info">
+                Run during project kickoff. Exports all permissions and generates the identity translation mapping required to re-grant access in the target tenant without errors.
+            </div>
+            <div id="scriptList" class="script-list">
+                <!-- Injected via JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <div>
+        <div class="card">
+            <div class="card-header">
+                <span>Phase Readiness Checklist</span>
+            </div>
+            <div id="phaseChecklist">
+                <!-- Injected via JavaScript -->
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <span>CLI Quick Start</span>
+            </div>
+            <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 12px;">
+                Prefer the interactive terminal menu? Run from your PowerShell console:
+            </p>
+            <div style="background: var(--bg-primary); padding: 12px; border-radius: 6px; border: 1px solid var(--border); font-family: monospace; font-size: 13px; color: var(--accent); display: flex; justify-content: space-between; align-items: center;">
+                <span>.\Start-Migration.ps1</span>
+                <button class="copy-btn" onclick="copyText('.\\Start-Migration.ps1')">Copy</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let currentStep = 'P';
+
+    const phases = {
+        'P': {
+            title: "Phase P: Planning Stage (Permissions & Identity Mapping)",
+            badge: "4 Scripts",
+            notice: "Run during scoping. Exports all permissions and produces the Identity Mapping Plan so target tenant accounts can be mapped and verified prior to migration day.",
+            scripts: [
+                { name: "1. Export All Permissions", file: "0-Planning/1-ExportAllPermissions.ps1", desc: "Exports all Subscription/RG/Resource RBAC, Custom Roles, Key Vault policies, MI roles, and SQL admins.", type: "ps1" },
+                { name: "2. Generate Identity Mapping Plan", file: "0-Planning/2-GenerateIdentityMappingTemplate.ps1", desc: "Builds Identity_Mapping_Plan.csv template listing all unique Users, Groups, and Service Principals.", type: "ps1" },
+                { name: "3. Resolve Target Identities", file: "0-Planning/3-ResolveTargetIdentities.ps1", desc: "Queries destination Entra ID to populate TargetObjectIds and flags missing accounts.", type: "ps1" },
+                { name: "4. Compare Compute Quotas", file: "0-Planning/4-CompareSubscriptionQuotas.ps1", desc: "Checks VM core usage in source vs available compute quotas in target region.", type: "ps1" }
+            ],
+            checklist: [
+                "Exported complete RBAC permissions into migration-data/Planning/",
+                "Generated and reviewed Identity_Mapping_Plan.csv",
+                "Verified target users/groups exist in destination Entra ID tenant",
+                "Confirmed destination regional compute vCPU limits have sufficient headroom"
+            ]
+        },
+        '0': {
+            title: "Phase 0: Pre-Flight Discovery & Blocker Assessment",
+            badge: "3 Scripts",
+            notice: "Identifies hard ARM blockers that will cause deletions or migration moves to fail before you begin.",
+            scripts: [
+                { name: "1. Check Migration Blockers", file: "1-InitialReview/2-CheckMigrationBlockers.ps1", desc: "Scans for Resource Locks, VNet Peerings, Private Endpoints, MIs, and SSL bindings.", type: "ps1" },
+                { name: "2. Audit VM Disk Encryption", file: "1-InitialReview/1-CheckVMDiskEncryption.ps1", desc: "Scans for BitLocker / ADE (must decrypt) and Customer-Managed Keys (DES).", type: "ps1" },
+                { name: "3. Assign CSP Foreign Principal", file: "1-InitialReview/CSPForeignPrincipal.ps1", desc: "(CSP Partner only) Grants Foreign Principal Owner rights on subscription.", type: "ps1" }
+            ],
+            checklist: [
+                "Scan report generated with 0 critical blockers",
+                "No active BitLocker/ADE encryptions on VMs",
+                "CSP partner account has Owner access over the subscription"
+            ]
+        },
+        '1': {
+            title: "Phase 1: Prepare Destination Subscription",
+            badge: "2 Scripts",
+            notice: "Ensures feature parity and creates resource containers in target subscription.",
+            scripts: [
+                { name: "1. Sync Resource Providers", file: "3-MigrationPrep/2-RegisterResources.ps1", desc: "Registers all missing resource providers from source into target subscription.", type: "ps1" },
+                { name: "2. Pre-Create Resource Groups", file: "3-MigrationPrep/3-ResourceGroups.ps1", desc: "Recreates all RGs in destination with identical names, locations, and tags.", type: "ps1" }
+            ],
+            checklist: [
+                "Resource providers registered in destination",
+                "Resource groups created with matching locations and tags"
+            ]
+        },
+        '2': {
+            title: "Phase 2: Comprehensive State Backup",
+            badge: "11 Scripts",
+            notice: "Must be run BEFORE disabling anything. Order is critical: locks, custom roles, and RBAC must be backed up first.",
+            scripts: [
+                { name: "1. Backup Resource Locks", file: "3-MigrationPrep/0-BackupAndRemoveResourceLocks.ps1", desc: "Exports all Resource Locks to ResourceLocks_Backup.json.", type: "ps1" },
+                { name: "2. Backup Custom Roles", file: "3-MigrationPrep/4-BackupCustomRoles.ps1", desc: "Exports all custom RBAC role definitions.", type: "ps1" },
+                { name: "3. Export Master RBAC", file: "3-MigrationPrep/4-ListRoleAssignmentsv2.ps1", desc: "Exports complete RBAC role assignments across subscription.", type: "ps1" },
+                { name: "4. Backup Managed Identities", file: "3-MigrationPrep/11-BackupIdentities.ps1", desc: "Catalogs all MIs and queries role assignments held by their PrincipalIds.", type: "ps1" },
+                { name: "5. Backup Public IPs", file: "3-MigrationPrep/5-BackupPublicIPs.ps1", desc: "Saves SKU, allocation, DNS labels, and IP version.", type: "ps1" },
+                { name: "6. Backup Action Groups", file: "3-MigrationPrep/6-BackupActionGroups.ps1", desc: "Saves monitor action groups and receivers.", type: "ps1" },
+                { name: "7. Backup Diagnostic Settings", file: "3-MigrationPrep/9-BackupDiagSettings.ps1", desc: "Saves diagnostic settings for all supported resources.", type: "ps1" },
+                { name: "8. Backup Private Endpoints", file: "3-MigrationPrep/10-BackupPrivateEndpoints.azcli", desc: "Saves private endpoints and Private DNS Zone Groups.", type: "azcli" },
+                { name: "9. Backup Key Vault Policies", file: "3-MigrationPrep/12-BackupAccessPolicies.azcli", desc: "Saves access policies and auth model.", type: "azcli" },
+                { name: "10. Backup VM & Storage Backups", file: "3-MigrationPrep/13-BackupVMBackupSettings.ps1", desc: "Saves VM backup policies and file share backup associations.", type: "ps1" },
+                { name: "11. Backup App Gateways & WAF", file: "3-MigrationPrep/16-BackupAppGateways.ps1", desc: "Exports Application Gateways and WAF policies.", type: "ps1" }
+            ],
+            checklist: [
+                "All 11 backup files verified in migration-data/",
+                "ARM RG template exports completed in migration-data/ARMExports/"
+            ]
+        },
+        '3': {
+            title: "Phase 3: Pre-Migration Cleanup & Disassociation",
+            badge: "8 Scripts",
+            notice: "Removes blockers. Stop backups (retain data), detach MIs, unbind SSL certs, and disconnect peerings.",
+            scripts: [
+                { name: "1. Remove Resource Locks", file: "3-MigrationPrep/0-BackupAndRemoveResourceLocks.ps1", desc: "Run with -RemoveLocks to clear all blockers.", type: "ps1" },
+                { name: "2. Disable VM Backups", file: "4-Deletions/5-DisableBackups.ps1", desc: "Stops protection (retains recovery points) and deletes restore point collections.", type: "ps1" },
+                { name: "3. Disable Storage Backups", file: "4-Deletions/6-DisableSABackups.azcli", desc: "Stops File Share backup protection.", type: "azcli" },
+                { name: "4. Detach Managed Identities", file: "4-Deletions/4-DisableMIdentities.ps1", desc: "Detaches system-assigned and user-assigned MIs.", type: "ps1" },
+                { name: "5. Unbind App Service SSL", file: "4-Deletions/7-UnbindAppServiceCertificates.ps1", desc: "Unbinds SSL certificates from custom hostnames.", type: "ps1" },
+                { name: "6. Disassociate Public IPs", file: "4-Deletions/1-PublicIPdiss.azcli", desc: "Disassociates PIPs from NICs and logs exact IPConfig mapping.", type: "azcli" },
+                { name: "7. Delete Private Endpoints", file: "4-Deletions/3-PrivateEndpoints.azcli", desc: "Deletes PEs across the subscription.", type: "azcli" },
+                { name: "8. Delete VNet Peerings", file: "5-VNETPeerings/2.DeleteVNETs.ps1", desc: "Deletes peering links on VNets.", type: "ps1" }
+            ],
+            checklist: [
+                "Resource locks removed",
+                "Backup protection paused (recovery data intact)",
+                "Managed identities detached",
+                "Private endpoints deleted",
+                "VNet peerings disconnected"
+            ]
+        },
+        '4': {
+            title: "Phase 4: Migration Execution",
+            badge: "4 Scripts",
+            notice: "Execute according to your chosen archetype (Same-Tenant Resource Move vs Cross-Tenant Directory Transfer).",
+            scripts: [
+                { name: "1. Validate RG Move", file: "6-MIGRATION/1-ValidateRGMove.ps1", desc: "Calls ARM validateMoveResources to confirm zero blockers remain.", type: "ps1" },
+                { name: "2. Execute RG Move", file: "6-MIGRATION/2-MigrateRG.ps1", desc: "Executes ARM resource move to target subscription.", type: "ps1" },
+                { name: "3. Move Recovery Services Vaults", file: "6-MIGRATION/3-MigrateRecoveryServicesVault.ps1", desc: "Moves RSV to destination subscription.", type: "ps1" },
+                { name: "4. Cross-Tenant Directory Transfer", file: "6-MIGRATION/4-TransferSubscriptionDirectory.ps1", desc: "(Cross-Tenant only) Executes az account tenant-change.", type: "ps1" }
+            ],
+            checklist: [
+                "Validation passed with 0 errors",
+                "Resource group moves completed",
+                "Subscription accessible in destination context"
+            ]
+        },
+        '5': {
+            title: "Phase 5: Recreate & Restore Destination Environment",
+            badge: "15 Scripts",
+            notice: "Restores dependencies, reattaches networking, re-enables MIs, and automatically remaps RBAC permissions.",
+            scripts: [
+                { name: "1. Recreate VNet Peerings", file: "5-VNETPeerings/3.RecreatePeerings.ps1", desc: "Restores peerings with subscription ID rewriting.", type: "ps1" },
+                { name: "2. Reattach Public IPs", file: "7-Recreation/1-PublicIPass.azcli", desc: "Rebinds PIPs to exact NIC and IPConfig names.", type: "azcli" },
+                { name: "3. Recreate Private Endpoints", file: "7-Recreation/3-PrivateEndpoints.azcli", desc: "Recreates PEs and Private DNS Zone Groups.", type: "azcli" },
+                { name: "4. Restore Custom Roles", file: "7-Recreation/5-RestoreCustomRoles.ps1", desc: "Recreates custom RBAC role definitions in target.", type: "ps1" },
+                { name: "5. Re-enable Managed Identities", file: "7-Recreation/4-A-RecreateMIdentities.ps1", desc: "Enables MIs and generates NewManagedIdentitiesMapping.json.", type: "ps1" },
+                { name: "6. Restore Key Vault Access", file: "7-Recreation/4-B-RestoreKeyVaultAccess.ps1", desc: "Auto-grants Key Vault policies to new MI ObjectIds.", type: "ps1" },
+                { name: "7. Restore Role Assignments", file: "7-Recreation/5-RestoreRoleAssignments.ps1", desc: "Automatically remaps old MI IDs and target tenant user IDs.", type: "ps1" },
+                { name: "8. Restore App Service SSL", file: "7-Recreation/5-RestoreAppServiceCertificates.ps1", desc: "Re-binds hostname SSL certificates.", type: "ps1" },
+                { name: "9. Restore NAT Gateways", file: "7-Recreation/6-NATGateway.azcli", desc: "Reattaches NAT Gateways to subnets.", type: "azcli" },
+                { name: "10. Restore Action Groups", file: "7-Recreation/7-RestoreActionGroups.ps1", desc: "Recreates action groups and alert receivers.", type: "ps1" },
+                { name: "11. Restore VM Backups", file: "7-Recreation/8-VMBackups.ps1", desc: "Re-protects VMs in destination vaults.", type: "ps1" },
+                { name: "12. Restore Diagnostic Settings", file: "7-Recreation/10-RestoreDiagSettings.ps1", desc: "Reapplies diagnostic settings with rewritten workspace IDs.", type: "ps1" },
+                { name: "13. Restore App Gateways & WAF", file: "7-Recreation/11-RestoreAppGateways.ps1", desc: "Restores WAF policies and App Gateway routing.", type: "ps1" },
+                { name: "14. Restore Resource Locks", file: "7-Recreation/0-RestoreResourceLocks.ps1", desc: "Re-applies original Resource Locks.", type: "ps1" }
+            ],
+            checklist: [
+                "VNet peerings connected",
+                "Managed identities assigned and RBAC restored",
+                "Key Vault access confirmed",
+                "Backup protection re-enabled",
+                "Locks restored"
+            ]
+        },
+        '6': {
+            title: "Phase 6: Post-Migration Verification",
+            badge: "Checklist",
+            notice: "Perform live verification of application workload functionality.",
+            scripts: [],
+            checklist: [
+                "VM and App Service connectivity to Key Vault and Storage verified",
+                "RBAC_Restore.log reviewed (0 critical failures)",
+                "Triggered on-demand backup test job in RSV",
+                "Checked Private Endpoint DNS resolution",
+                "External DNS / Traffic Manager records updated if Public IPs changed"
+            ]
+        }
+    };
+
+    function selectStep(step) {
+        currentStep = step;
+        document.querySelectorAll('.step-pill').forEach(pill => pill.classList.remove('active'));
+        event.currentTarget.classList.add('active');
+        renderPhase();
+    }
+
+    function renderPhase() {
+        const scenario = document.getElementById('scenarioSelect').value;
+        const phaseData = phases[currentStep];
+
+        document.getElementById('phaseTitle').textContent = phaseData.title;
+        document.getElementById('phaseBadge').textContent = phaseData.badge;
+        document.getElementById('phaseNotice').textContent = phaseData.notice;
+
+        // Render scripts
+        const scriptListContainer = document.getElementById('scriptList');
+        scriptListContainer.innerHTML = '';
+
+        if (phaseData.scripts.length === 0) {
+            scriptListContainer.innerHTML = '<p style="color: var(--text-secondary); font-size: 14px; padding: 12px;">This phase consists of operational verification tasks. Review the checklist on the right.</p>';
+        } else {
+            phaseData.scripts.forEach(s => {
+                // Filter scenario B vs A in Phase 4
+                if (currentStep === '4') {
+                    if (scenario === 'same-tenant' && s.file.includes('TransferSubscriptionDirectory')) return;
+                    if (scenario === 'cross-tenant' && (s.file.includes('ValidateRGMove') || s.file.includes('MigrateRG'))) return;
+                }
+
+                const item = document.createElement('div');
+                item.className = 'script-item';
+                const runCmd = s.type === 'ps1' ? `.\\${s.file.replace(/\//g, '\\')}` : `bash ${s.file}`;
+
+                item.innerHTML = `
+                    <div class="script-meta">
+                        <h4>${s.name}</h4>
+                        <p>${s.desc}</p>
+                        <span class="script-path">${s.file}</span>
+                    </div>
+                    <button class="copy-btn" onclick="copyText('${runCmd.replace(/\\/g, '\\\\')}')">Copy Cmd</button>
+                `;
+                scriptListContainer.appendChild(item);
+            });
+        }
+
+        // Render checklist
+        const checklistContainer = document.getElementById('phaseChecklist');
+        checklistContainer.innerHTML = '';
+        phaseData.checklist.forEach((check, index) => {
+            const row = document.createElement('div');
+            row.className = 'checklist-item';
+            row.innerHTML = `
+                <input type="checkbox" id="check_${currentStep}_${index}">
+                <label for="check_${currentStep}_${index}">${check}</label>
+            `;
+            checklistContainer.appendChild(row);
+        });
+    }
+
+    function copyText(text) {
+        navigator.clipboard.writeText(text);
+        const btn = event.currentTarget;
+        const original = btn.textContent;
+        btn.textContent = 'Copied!';
+        btn.style.background = 'var(--success)';
+        btn.style.color = '#fff';
+        setTimeout(() => {
+            btn.textContent = original;
+            btn.style.background = '';
+            btn.style.color = '';
+        }, 1500);
+    }
+
+    // Initialize
+    renderPhase();
+</script>
+
+</body>
+</html>

@@ -1,39 +1,71 @@
-## DESCRIPTION: Restores VM backup protection in the destination subscription using the backup
-##              configuration CSV produced by 13-BackupVMBackupSettings.ps1.
-## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
-##              2. Ensure C:\temp\AzureBackupSettingsBackup\BackupConfig.csv exists.
-##              3. Ensure Recovery Services Vaults and backup policies exist in the destination.
-##              4. Run in PowerShell with the Az module installed.
-. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+<#
+.SYNOPSIS
+    Re-enables VM backup protection in the destination subscription from the CSV backup.
+.DESCRIPTION
+    Sets vault context and re-protects VMs under the specified backup policies.
+#>
 
-##### Restore the Backup Policy on all VMs (from backup restore file) #####
+$paramsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "migration-params.ps1"
+if (Test-Path $paramsPath) { . $paramsPath }
 
-# Set Subscription (loaded from migration-params.ps1)
-$subscriptionId = $destinationSubscriptionId
-Set-AzContext -SubscriptionId $subscriptionId
+param(
+    [string]$SubscriptionId   = $destinationSubscriptionId,
+    [string]$BackupConfigFile = (Join-Path $backupRootDir "BackupSettings/VMBackupConfig.csv")
+)
 
-# Load backup configuration
-$backupConfigFile = "C:\temp\AzureBackupSettingsBackup\BackupConfig.csv"
-$backupConfigs = Import-Csv -Path $backupConfigFile
+Write-Host "=== Re-enabling VM Backup Protection ===" -ForegroundColor Cyan
+Set-AzContext -Subscription $SubscriptionId -ErrorAction Stop | Out-Null
+
+if (-not (Test-Path $BackupConfigFile)) {
+    Write-Host "Backup config file not found: $BackupConfigFile. Skipping." -ForegroundColor Yellow
+    exit 0
+}
+
+$backupConfigs = Import-Csv -Path $BackupConfigFile
+
+if (-not $backupConfigs -or $backupConfigs.Count -eq 0) {
+    Write-Host "No backup configurations in file." -ForegroundColor Green
+    exit 0
+}
+
+Write-Host "Processing $($backupConfigs.Count) VM backup configuration(s)..." -ForegroundColor Cyan
 
 foreach ($config in $backupConfigs) {
-    Write-Host "🔄 Restoring backup for VM: $($config.VMName)"
+    $vmName    = $config.VMName
+    $rgName    = $config.ResourceGroupName
+    $vaultName = $config.VaultName
+    $policyName = $config.PolicyName
 
-    # Get the vault in the new subscription
-    $vault = Get-AzRecoveryServicesVault -Name $config.VaultName
+    Write-Host "Restoring backup for VM '$vmName' in Vault '$vaultName'..." -ForegroundColor Yellow
 
-    # Get the backup policy in the new vault
-    $policy = Get-AzRecoveryServicesBackupProtectionPolicy -VaultId $vault.ID | Where-Object { $_.Name -eq $config.PolicyName }
-
-    if (-not $policy) {
-        Write-Host "⚠ WARNING: Policy not found for VM: $($config.VMName). Skipping..."
+    # Get vault in destination subscription
+    $vault = Get-AzRecoveryServicesVault -Name $vaultName -ErrorAction SilentlyContinue
+    if (-not $vault) {
+        Write-Host "  ⚠️ Vault '$vaultName' not found in destination subscription. Ensure vault is created or moved." -ForegroundColor Red
         continue
     }
 
-    # Re-enable backup using FullBackupName (to match Azure Backup exactly)
-    Enable-AzRecoveryServicesBackupProtection -VaultId $vault.ID -Policy $policy -Name $config.FullBackupName -ResourceType "AzureVM"
+    # Set vault context (required before calling backup cmdlets)
+    Set-AzRecoveryServicesVaultContext -Vault $vault
 
-    Write-Host "✅ Backup re-enabled for: $($config.VMName)"
+    # Get policy
+    $policy = Get-AzRecoveryServicesBackupProtectionPolicy | Where-Object { $_.Name -eq $policyName }
+    if (-not $policy) {
+        Write-Host "  ⚠️ Backup Policy '$policyName' not found in vault '$vaultName'. Skipping." -ForegroundColor Red
+        continue
+    }
+
+    try {
+        Enable-AzRecoveryServicesBackupProtection `
+            -ResourceGroupName $rgName `
+            -Name $vmName `
+            -Policy $policy `
+            -ErrorAction Stop | Out-Null
+
+        Write-Host "  ✅ Backup re-enabled for VM: $vmName" -ForegroundColor Green
+    } catch {
+        Write-Host "  ❌ Failed to re-enable backup for $vmName: $_" -ForegroundColor Red
+    }
 }
 
-Write-Host "🔹 Backup configuration restored successfully."
+Write-Host "`nVM backup restoration complete." -ForegroundColor Green

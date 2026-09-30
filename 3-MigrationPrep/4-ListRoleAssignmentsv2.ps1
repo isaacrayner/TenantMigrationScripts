@@ -1,74 +1,78 @@
-## DESCRIPTION: Exports all RBAC role assignments from the source subscription to JSON and CSV.
-##              Run this during migration prep. To restore assignments in the destination,
-##              use 7-Recreation/5-RestoreRoleAssignments.ps1.
-## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
-##              2. Run in PowerShell with the Az module installed.
-##              3. Review C:\temp\RBAC_Migration.log for results.
-. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+<#
+.SYNOPSIS
+    Exports all RBAC role assignments from the source subscription to JSON and CSV.
+.DESCRIPTION
+    Captures complete assignment metadata (Scope, RoleDefinition, ObjectId, ObjectType,
+    SignInName, DisplayName) to enable restoring permissions in Phase 7.
+#>
 
-# Subscription IDs (loaded from migration-params.ps1)
-$subscriptionId    = $sourceSubscriptionId
-$newSubscriptionId = $destinationSubscriptionId
+$paramsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "migration-params.ps1"
+if (Test-Path $paramsPath) { . $paramsPath }
 
-# Define log file
-$logFile = "C:\temp\RBAC_Migration.log"
+param(
+    [string]$SubscriptionId = $sourceSubscriptionId,
+    [string]$JsonFile       = (Join-Path $backupRootDir "RBAC_Assignments.json"),
+    [string]$CsvFile        = (Join-Path $backupRootDir "RBAC_Assignments.csv")
+)
 
-# Function to log messages
+$logFile = Join-Path $logRootDir "RBAC_Export.log"
+
 function Write-Log {
-    param (
-        [string]$message
-    )
+    param([string]$message, [string]$level = "INFO")
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $logMessage = "$timestamp - $message"
-    Write-Host $logMessage
-    Add-Content -Path $logFile -Value $logMessage
+    $line = "[$timestamp] [$level] $message"
+    Write-Host $line -ForegroundColor $(if ($level -eq "ERROR") { "Red" } elseif ($level -eq "WARN") { "Yellow" } else { "Cyan" })
+    Add-Content -Path $logFile -Value $line
 }
 
-# Set file paths for export
-$jsonFile = "C:\temp\RBAC_Assignments.json"
-$csvFile = "C:\temp\RBAC_Assignments.csv"
-
-
-# Step 1: Log in to Azure
-try {
-    Write-Log "Logging in to Azure..."
-    Connect-AzAccount
-    Write-Log "Azure login successful."
-} catch {
-    Write-Log "ERROR: Azure login failed. $_"
-    exit
-}
-
-# Step 2: Set Subscription Context
+Write-Log "=== RBAC Role Assignment Export ==="
+Write-Log "Source Subscription: $SubscriptionId"
 
 try {
-    Write-Log "Setting context to subscription: $subscriptionId"
-    Set-AzContext -SubscriptionId $subscriptionId
+    Set-AzContext -Subscription $SubscriptionId -ErrorAction Stop | Out-Null
     Write-Log "Subscription context set successfully."
 } catch {
-    Write-Log "ERROR: Failed to set subscription context. $_"
-    exit
+    Write-Log "ERROR setting subscription context: $_" "ERROR"
+    exit 1
 }
 
-# Step 3: Retrieve and Export RBAC Assignments
 try {
-    Write-Log "Retrieving all RBAC assignments for subscription: $subscriptionId..."
-    $rbacAssignments = Get-AzRoleAssignment
+    Write-Log "Querying all role assignments in subscription..."
+    $rbacAssignments = Get-AzRoleAssignment -ErrorAction Stop
 
-    if ($rbacAssignments.Count -eq 0) {
-        Write-Log "No RBAC assignments found."
-    } else {
-        # Export to JSON
-        $rbacAssignments | ConvertTo-Json -Depth 10 | Out-File -FilePath $jsonFile
-        Write-Log "RBAC assignments exported to $jsonFile"
-
-        # Export to CSV
-        $rbacAssignments | Select-Object ObjectId, DisplayName, RoleDefinitionName, Scope | Export-Csv -Path $csvFile -NoTypeInformation
-        Write-Log "RBAC assignments exported to $csvFile"
+    if (-not $rbacAssignments -or $rbacAssignments.Count -eq 0) {
+        Write-Log "No RBAC assignments found." "WARN"
+        "[]" | Out-File -FilePath $JsonFile -Encoding utf8
+        exit 0
     }
+
+    Write-Log "Found $($rbacAssignments.Count) role assignment(s)."
+
+    # Format structured export
+    $exportItems = @()
+    foreach ($a in $rbacAssignments) {
+        $exportItems += [PSCustomObject]@{
+            RoleAssignmentId   = $a.RoleAssignmentId
+            RoleDefinitionName = $a.RoleDefinitionName
+            RoleDefinitionId   = $a.RoleDefinitionId
+            Scope              = $a.Scope
+            DisplayName        = $a.DisplayName
+            SignInName         = $a.SignInName
+            ObjectId           = $a.ObjectId
+            ObjectType         = $a.ObjectType
+            CanDelegate        = $a.CanDelegate
+        }
+    }
+
+    $exportItems | ConvertTo-Json -Depth 10 | Out-File -FilePath $JsonFile -Encoding utf8
+    Write-Log "Exported JSON to: $JsonFile" "SUCCESS"
+
+    $exportItems | Export-Csv -Path $CsvFile -NoTypeInformation -Encoding utf8
+    Write-Log "Exported CSV to : $CsvFile" "SUCCESS"
+
 } catch {
-    Write-Log "ERROR: Failed to retrieve RBAC assignments. $_"
-    exit
+    Write-Log "ERROR retrieving role assignments: $_" "ERROR"
+    exit 1
 }
 
-Write-Log "Export complete. To restore assignments in the destination subscription, run 7-Recreation/5-RestoreRoleAssignments.ps1."
+Write-Log "RBAC export complete. Restore via 7-Recreation/5-RestoreRoleAssignments.ps1." "SUCCESS"

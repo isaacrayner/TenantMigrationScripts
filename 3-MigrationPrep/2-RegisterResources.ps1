@@ -1,42 +1,59 @@
-## DESCRIPTION: Reads all registered resource providers from the source subscription and registers
-##              them in the destination subscription. Ensures feature parity before migration.
-## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
-##              2. Run in PowerShell with the Az module installed.
-##              3. Check C:\temp\ResourceProviderRegistrationErrors.log for any failures.
-. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+<#
+.SYNOPSIS
+    Reads all registered resource providers from the source subscription and
+    registers missing ones in the destination subscription.
+.DESCRIPTION
+    Ensures provider parity so deployments and moved resources don't fail due to
+    unregistered resource providers in the target subscription.
+#>
 
-#Register all the resources in each subscription, so that they match
-# Log in to Azure (if not already logged in)
-Connect-AzAccount
+$paramsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "migration-params.ps1"
+if (Test-Path $paramsPath) { . $paramsPath }
 
-# Define source and destination subscriptions (loaded from migration-params.ps1)
-$sourceSubscription      = $sourceSubscriptionId
-$destinationSubscription = $destinationSubscriptionId
+param(
+    [string]$SourceSub = $sourceSubscriptionId,
+    [string]$DestSub   = $destinationSubscriptionId
+)
 
-# Step 1: Set context to the source subscription
-Set-AzContext -Subscription $sourceSubscription
+$errorLog = Join-Path $logRootDir "ResourceProviderRegistrationErrors.log"
+if (Test-Path $errorLog) { Remove-Item $errorLog -Force }
 
-# Step 2: Get all registered resource providers in the source subscription
-$registeredProviders = Get-AzResourceProvider -ListAvailable | Where-Object { $_.RegistrationState -eq "Registered" }
+Write-Host "=== Resource Provider Synchronization ===" -ForegroundColor Cyan
+Write-Host "Source Sub     : $SourceSub"
+Write-Host "Destination Sub: $DestSub"
 
-# Step 3: Set context to the destination subscription
-Set-AzContext -Subscription $destinationSubscription
+# Step 1: Query registered providers in source
+Write-Host "Querying registered providers in source..." -ForegroundColor Cyan
+Set-AzContext -Subscription $SourceSub -ErrorAction Stop | Out-Null
+$sourceRegistered = Get-AzResourceProvider -ListAvailable | Where-Object { $_.RegistrationState -eq "Registered" }
+Write-Host "Found $($sourceRegistered.Count) registered providers in source subscription." -ForegroundColor Green
 
-# Create a log file to record errors
-$errorLog = "C:\temp\ResourceProviderRegistrationErrors.log"
-if (Test-Path $errorLog) { Remove-Item $errorLog }
+# Step 2: Query already registered providers in destination
+Write-Host "Querying registered providers in destination..." -ForegroundColor Cyan
+Set-AzContext -Subscription $DestSub -ErrorAction Stop | Out-Null
+$destRegistered = Get-AzResourceProvider -ListAvailable | Where-Object { $_.RegistrationState -eq "Registered" }
+$destRegisteredNames = [System.Collections.Generic.HashSet[string]]::new([string[]]$destRegistered.ProviderNamespace)
 
-# Step 4: Register each provider in the destination subscription
-foreach ($provider in $registeredProviders) {
+# Step 3: Register any missing in destination
+$missingProviders = $sourceRegistered | Where-Object { -not $destRegisteredNames.Contains($_.ProviderNamespace) }
+
+if (-not $missingProviders or $missingProviders.Count -eq 0) {
+    Write-Host "All source resource providers are already registered in the destination subscription!" -ForegroundColor Green
+    exit 0
+}
+
+Write-Host "Registering $($missingProviders.Count) missing providers in destination..." -ForegroundColor Yellow
+
+foreach ($provider in $missingProviders) {
     try {
-        Write-Host "Registering provider:" $provider.ProviderNamespace
-        Register-AzResourceProvider -ProviderNamespace $provider.ProviderNamespace
+        Write-Host "  Registering provider: $($provider.ProviderNamespace)..." -ForegroundColor Cyan
+        Register-AzResourceProvider -ProviderNamespace $provider.ProviderNamespace -ErrorAction Stop | Out-Null
+        Write-Host "  ✅ Registered: $($provider.ProviderNamespace)" -ForegroundColor Green
     } catch {
-        # Log the error to the console and a file
         $errorMessage = "Failed to register provider: $($provider.ProviderNamespace). Error: $($_.Exception.Message)"
-        Write-Host $errorMessage -ForegroundColor Red
-        Add-Content -Path $errorLog -Value $errorMessage
+        Write-Host "  ❌ $errorMessage" -ForegroundColor Red
+        Add-Content -Path $errorLog -Value "[$((Get-Date).ToString('s'))] $errorMessage"
     }
 }
 
-Write-Host "All resource providers have been processed. Check the log for any errors: $errorLog"
+Write-Host "`nResource provider synchronization complete. Check log for any failures: $errorLog" -ForegroundColor Green

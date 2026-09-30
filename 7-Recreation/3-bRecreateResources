@@ -1,9 +1,0 @@
-## DESCRIPTION: Deploys an ARM template to a resource group in the destination subscription.
-##              Used to recreate resources (e.g. WAF Policy) from exported ARM templates.
-## USAGE:       1. Update the subscription ID in Set-AzContext.
-##              2. Update -ResourceGroupName and -TemplateFile to match your target RG and template.
-##              3. Run in PowerShell with the Az module installed.
-
-Set-AzContext -Subscription '00000000-0000-0000-0000-000000000000'
-
-New-AzResourceGroupDeployment -Name WAFPolicy -ResourceGroupName rg-room-booking -TemplateFile .\WAPFirewall.json

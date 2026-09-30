@@ -1,50 +1,65 @@
-## DESCRIPTION: Exports all RBAC role assignments, managed identities, service principals, and
-##              user principals from the source subscription to CSV files. Also includes notes
-##              on recreating service principals in the destination tenant.
-## USAGE:       1. Replace <source-tenant-id> and <source-subscription-id> with correct values.
-##              2. Update file paths as needed.
-##              3. Run each section in sequence in PowerShell with the Az module installed.
-. (Join-Path $PSScriptRoot "..\migration-params.ps1")
-
-
-#Download Role Assignments
-#https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-list-portal#list-role-assignments-at-a-scope
-#You can download role assignments at a scope in CSV or JSON formats. This can be helpful if you need to inspect the list in a spreadsheet or take an inventory when migrating a subscription.
-
-#STEP ONE: LIST ALL ROLE ASSIGNMENTS
-Connect-AzAccount -TenantId $sourceTenantId
-$SubscriptionId = $sourceSubscriptionId
-Select-AzSubscription -SubscriptionId $SubscriptionId
-$RoleAssignments = Get-AzRoleAssignment
-
-$RoleAssignments | Select-Object RoleDefinitionName, PrincipalName, PrincipalType, Scope | Export-Csv -Path "C:\Temp\RoleAssignments.csv" -NoTypeInformation
-
-#STE ONE B: EXPORT ALL CUSTOM ROLES
-
-
-<# STEP 2: Map Identities:
-Identify which identities in the source tenant have equivalents in the destination tenant.
-If an identity doesn't exist, you'll need to create it in the destination tenant (e.g., a new user, group, or service principal).
-Resolve Conflicts:
-Some roles might not make sense in the new tenant (e.g., if tied to resources that don’t exist in the destination).
+<#
+.SYNOPSIS
+    Inventories Azure AD (Entra ID) Users, Groups, and Service Principals associated
+    with the source subscription.
+.DESCRIPTION
+    Exports principal details to CSV files in the centralized migration-data folder.
 #>
 
-#list managed identities
-Get-AzUserAssignedIdentity | Select-Object Name, ResourceGroupName, Location, ClientId, PrincipalId |
-Export-Csv -Path "C:\Temp\UserAssignedIdentities.csv" -NoTypeInformation
+$paramsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "migration-params.ps1"
+if (Test-Path $paramsPath) { . $paramsPath }
 
-OR This
-az resource list --query "[?identity.type=='SystemAssigned'].{Name:name,  principalId:identity.principalId}" --output table
+param(
+    [string]$SubscriptionId = $sourceSubscriptionId,
+    [string]$OutputDir      = (Join-Path $backupRootDir "Identities")
+)
 
-#Get Service Principals
-Get-AzADServicePrincipal | Select-Object DisplayName, AppId, ObjectId | Export-Csv -Path "C:\Temp\ServicePrincipals.csv" -NoTypeInformation
+Write-Host "=== Entra ID Identity Inventory ===" -ForegroundColor Cyan
+Set-AzContext -Subscription $SubscriptionId -ErrorAction Stop | Out-Null
 
-#document user principals
-Get-AzADUser | Select-Object DisplayName, UserPrincipalName, ObjectId | Export-Csv -Path "C:\Temp\UserPrincipals.csv" -NoTypeInformation
+if (-not (Test-Path -Path $OutputDir)) {
+    New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+}
 
+# 1. Export Role Assignments using v2 script
+Write-Host "Exporting RBAC Role Assignments..." -ForegroundColor Cyan
+$v2Script = Join-Path $PSScriptRoot "4-ListRoleAssignmentsv2.ps1"
+if (Test-Path $v2Script) {
+    & $v2Script -SubscriptionId $SubscriptionId
+}
 
+# 2. Export User-Assigned Managed Identities
+Write-Host "Exporting User-Assigned Managed Identities..." -ForegroundColor Cyan
+try {
+    $userAssigned = Get-AzUserAssignedIdentity
+    $uaFile = Join-Path $OutputDir "UserAssignedIdentities.csv"
+    $userAssigned | Select-Object Name, ResourceGroupName, Location, ClientId, PrincipalId, Id |
+        Export-Csv -Path $uaFile -NoTypeInformation
+    Write-Host "  ✅ Saved to $uaFile" -ForegroundColor Green
+} catch {
+    Write-Host "  ⚠️ Could not export User-Assigned Identities: $_" -ForegroundColor Yellow
+}
 
-############
+# 3. Export Service Principals
+Write-Host "Exporting Entra ID Service Principals..." -ForegroundColor Cyan
+try {
+    $spFile = Join-Path $OutputDir "ServicePrincipals.csv"
+    Get-AzADServicePrincipal | Select-Object DisplayName, AppId, Id |
+        Export-Csv -Path $spFile -NoTypeInformation
+    Write-Host "  ✅ Saved to $spFile" -ForegroundColor Green
+} catch {
+    Write-Host "  ⚠️ Could not export Service Principals: $_" -ForegroundColor Yellow
+}
 
-#Recreate Service Principals
-New-AzADServicePrincipal -DisplayName "<ServicePrincipalName>" -AppId "<ApplicationId>"
+# 4. Export Users
+Write-Host "Exporting Entra ID Users..." -ForegroundColor Cyan
+try {
+    $userFile = Join-Path $OutputDir "UserPrincipals.csv"
+    Get-AzADUser | Select-Object DisplayName, UserPrincipalName, Id |
+        Export-Csv -Path $userFile -NoTypeInformation
+    Write-Host "  ✅ Saved to $userFile" -ForegroundColor Green
+} catch {
+    Write-Host "  ⚠️ Could not export Users: $_" -ForegroundColor Yellow
+}
+
+Write-Host "`nIdentity inventory complete. Data saved in $OutputDir" -ForegroundColor Green

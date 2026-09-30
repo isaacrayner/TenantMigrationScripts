@@ -1,130 +1,94 @@
-## DESCRIPTION: Backs up VM backup configurations (vault name, policy name, VM name) from all
-##              Recovery Services Vaults to a CSV file. Used by the disable and restore scripts.
-##              NOTE: Remove soft delete on Recovery Services Vaults before running.
-## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
-##              2. Update $backupFolder to your desired output directory.
-##              3. Run in PowerShell with the Az module installed.
-##              4. Output CSV is used by 5-DisableBackups.ps1 and 8-VMBackups.ps1.
-. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+<#
+.SYNOPSIS
+    Backs up Azure VM backup configurations across all Recovery Services Vaults.
+.DESCRIPTION
+    Exports VM Name, ResourceId, ResourceGroup, VaultName, and PolicyName to CSV/JSON.
+    Used by 4-Deletions/5-DisableBackups.ps1 and 7-Recreation/8-VMBackups.ps1.
+#>
 
-##### Create the backup of backups :-) #####
-##### remember to REMOVE SOFT DELETE ON THE RECOVERY SERVICES VAULTS #####
+$paramsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "migration-params.ps1"
+if (Test-Path $paramsPath) { . $paramsPath }
 
-# Set Subscription (loaded from migration-params.ps1)
-$subscriptionId = $sourceSubscriptionId
-Set-AzContext -SubscriptionId $subscriptionId
+param(
+    [string]$SubscriptionId = $sourceSubscriptionId,
+    [string]$BackupFolder   = (Join-Path $backupRootDir "BackupSettings")
+)
 
-# Set output file
-$backupFolder = "C:\temp\AzureBackupSettingsBackup"
-$backupConfigFile = "$backupFolder\BackupConfig.csv"
-$errorLogFile = "$backupFolder\BackupErrorLog.txt"
+Write-Host "=== Backing up Azure VM Backup Configurations ===" -ForegroundColor Cyan
+Set-AzContext -Subscription $SubscriptionId -ErrorAction Stop | Out-Null
 
-# Ensure the directory exists
-if (!(Test-Path -Path $backupFolder)) {
-    New-Item -ItemType Directory -Path $backupFolder -Force | Out-Null
+if (-not (Test-Path -Path $BackupFolder)) {
+    New-Item -ItemType Directory -Path $BackupFolder -Force | Out-Null
 }
 
-# Clear error log file
-"" | Set-Content -Path $errorLogFile
+$backupConfigFile = Join-Path $BackupFolder "VMBackupConfig.csv"
+$errorLogFile     = Join-Path $logRootDir "VMBackupErrorLog.txt"
+
+$vaults = Get-AzRecoveryServicesVault -ErrorAction Stop
+if (-not $vaults -or $vaults.Count -eq 0) {
+    Write-Host "No Recovery Services Vaults found in subscription." -ForegroundColor Green
+    exit 0
+}
 
 $backupConfigs = @()
 
-# Get all Recovery Services Vaults
-$vaults = Get-AzRecoveryServicesVault
-
 foreach ($vault in $vaults) {
-    Write-Output "Checking Recovery Services Vault: $($vault.Name)"
+    Write-Host "Checking Vault: $($vault.Name) (RG: $($vault.ResourceGroupName))..." -ForegroundColor Cyan
+    Set-AzRecoveryServicesVaultContext -Vault $vault -ErrorAction Stop | Out-Null
 
-    # Get all backup containers
     try {
-        $containers = Get-AzRecoveryServicesBackupContainer -VaultId $vault.ID -ContainerType "AzureVM"
+        $containers = Get-AzRecoveryServicesBackupContainer -VaultId $vault.ID -ContainerType "AzureVM" -ErrorAction SilentlyContinue
     } catch {
-        Write-Output "❌ ERROR: Could not get backup containers for vault: $($vault.Name) - $_" | Out-File -Append -FilePath $errorLogFile
+        Write-Host "  ❌ Failed to get backup containers for $($vault.Name): $_" -ForegroundColor Red
         continue
     }
 
     if (-not $containers -or $containers.Count -eq 0) {
-        Write-Output "⚠ No backup containers found in vault: $($vault.Name). Skipping..."
+        Write-Host "  No VM backup containers in vault $($vault.Name)." -ForegroundColor Gray
         continue
     }
 
-    # Get all VMs protected in this vault
     $protectedVMs = @()
     foreach ($container in $containers) {
         try {
-            $protectedVMs += Get-AzRecoveryServicesBackupItem -VaultId $vault.ID -Container $container -WorkloadType "AzureVM"
+            $protectedVMs += Get-AzRecoveryServicesBackupItem -VaultId $vault.ID -Container $container -WorkloadType "AzureVM" -ErrorAction SilentlyContinue
         } catch {
-            Write-Output "❌ ERROR: Could not get backup items for vault: $($vault.Name) - $_" | Out-File -Append -FilePath $errorLogFile
+            Write-Host "  ❌ Error retrieving backup items: $_" -ForegroundColor Red
         }
-    }
-
-    if (-not $protectedVMs -or $protectedVMs.Count -eq 0) {
-        Write-Output "⚠ No protected VMs found in vault: $($vault.Name). Skipping..."
-        continue
     }
 
     foreach ($vm in $protectedVMs) {
-        try {
-            # Ensure VM name is valid
-            if (-not $vm.Name) {
-                Write-Output "❌ ERROR: VM Name is missing for an entry in vault: $($vault.Name). Skipping..." | Out-File -Append -FilePath $errorLogFile
-                continue
-            }
+        $cleanVmName = ($vm.Name -split ";")[-1]
+        $vmRg = ($vm.SourceResourceId -split "/")[4]
 
-            # Store both the full backup name and the clean VM name
-            $fullBackupName = $vm.Name
-            $cleanVmName = ($vm.Name -split ";")[-1]
-
-            Write-Output "Saving backup configuration for VM: $cleanVmName"
-
-            # Ensure the VM has a policy before looking it up
-            if (-not $vm.PolicyId) {
-                Write-Output "⚠ WARNING: VM $cleanVmName has no associated policy. Skipping..."
-                continue
-            }
-
-            # Find the exact backup policy using PolicyId
+        # Get policy name
+        $policyName = "DefaultPolicy"
+        if ($vm.PolicyId) {
             $policy = Get-AzRecoveryServicesBackupProtectionPolicy -VaultId $vault.ID | Where-Object { $_.ID -eq $vm.PolicyId }
+            if ($policy) { $policyName = $policy.Name }
+        }
 
-            if (-not $policy) {
-                Write-Output "⚠ WARNING: Could not find matching backup policy for VM: $cleanVmName. Skipping..."
-                continue
-            }
+        Write-Host "  Saving backup configuration for VM: $cleanVmName (Policy: $policyName)" -ForegroundColor Green
 
-            # Store backup details
-            $backupConfigs += [PSCustomObject]@{
-                VMName            = $cleanVmName
-                FullBackupName    = $fullBackupName
-                ResourceId        = $vm.SourceResourceId
-                VaultName         = $vault.Name
-                VaultId           = $vault.ID
-                PolicyName        = $policy.Name
-                PolicyId          = $policy.ID
-            }
-
-        } catch {
-            Write-Output "❌ ERROR: Issue processing VM $cleanVmName - $_" | Out-File -Append -FilePath $errorLogFile
+        $backupConfigs += [PSCustomObject]@{
+            VMName            = $cleanVmName
+            FullBackupName    = $vm.Name
+            ResourceId        = $vm.SourceResourceId
+            ResourceGroupName = $vmRg
+            VaultName         = $vault.Name
+            VaultResourceGroup= $vault.ResourceGroupName
+            VaultId           = $vault.ID
+            PolicyName        = $policyName
+            PolicyId          = $vm.PolicyId
         }
     }
 }
 
-# Export backup configuration to CSV
-try {
-    if ($backupConfigs.Count -gt 0) {
-        $backupConfigs | Export-Csv -Path $backupConfigFile -NoTypeInformation
-        Write-Output "✅ Backup configuration saved to: $backupConfigFile"
-    } else {
-        Write-Output "⚠ No backup configurations were found. Nothing saved."
-    }
-} catch {
-    Write-Output "❌ ERROR: Could not save CSV file - $_" | Out-File -Append -FilePath $errorLogFile
+if ($backupConfigs.Count -gt 0) {
+    $backupConfigs | Export-Csv -Path $backupConfigFile -NoTypeInformation -Encoding utf8
+    $jsonFile = $backupConfigFile -replace "\.csv$", ".json"
+    $backupConfigs | ConvertTo-Json -Depth 5 | Out-File -FilePath $jsonFile -Encoding utf8
+    Write-Host "`n✅ VM Backup configurations saved to: $backupConfigFile" -ForegroundColor Green
+} else {
+    Write-Host "`nNo protected VMs found across any vaults." -ForegroundColor Yellow
 }
-
-Write-Output "🔹 Backup details collected. You can now review before disabling backup."
-
-# Show any errors captured in the log
-if ((Test-Path $errorLogFile) -and ((Get-Content -Path $errorLogFile | Measure-Object -Line).Lines -gt 0)) {
-    Write-Output "⚠ Some errors occurred. Check the log file at: $errorLogFile"
-}
-
-

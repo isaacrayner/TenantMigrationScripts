@@ -1,45 +1,53 @@
-## DESCRIPTION: Exports all VNet peering configurations across the subscription to a CSV file.
-##              Run this before deleting peerings so they can be recreated post-migration.
-## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
-##              2. Update the CSV output path.
-##              3. Run in PowerShell with the Az module installed.
-##              4. Output CSV is used by 3.RecreatePeerings.ps1.
-. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+<#
+.SYNOPSIS
+    Exports all Virtual Network Peering configurations across the source subscription.
+.DESCRIPTION
+    Captures LocalVNet, LocalResourceGroup, PeeringName, RemoteVNetId, AllowVnetAccess,
+    AllowForwardedTraffic, AllowGatewayTransit, and UseRemoteGateways.
+    Saves to migration-data/VNETs/NetPeeringsBackup.csv and .json.
+#>
 
-#Export all VNET Peerings and save to CSV
+$paramsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "migration-params.ps1"
+if (Test-Path $paramsPath) { . $paramsPath }
 
-# Connect to Azure
-Connect-AzAccount -TenantId $sourceTenantId
-Set-AzContext -Subscription $sourceSubscriptionId
+param(
+    [string]$SubscriptionId = $sourceSubscriptionId,
+    [string]$OutputDir      = (Join-Path $backupRootDir "VNETs")
+)
 
-# Set the Subscription
-$subscriptionId = $sourceSubscriptionId
-Select-AzSubscription -SubscriptionId $subscriptionId
+Write-Host "=== Backing up Virtual Network Peerings ===" -ForegroundColor Cyan
+Set-AzContext -Subscription $SubscriptionId -ErrorAction Stop | Out-Null
 
-# Get all Virtual Networks
-$vNets = Get-AzVirtualNetwork
+if (-not (Test-Path -Path $OutputDir)) {
+    New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+}
 
-# Create an array to store peering details
+$vNets = Get-AzVirtualNetwork -ErrorAction Stop
 $peeringList = @()
 
-# Loop through each VNet and collect peering details
 foreach ($vNet in $vNets) {
-    $peerings = $vNet.VirtualNetworkPeerings
-    foreach ($peering in $peerings) {
+    if (-not $vNet.VirtualNetworkPeerings) { continue }
+
+    foreach ($peering in $vNet.VirtualNetworkPeerings) {
         $peeringList += [PSCustomObject]@{
-            LocalVNetName      = $vNet.Name
-            LocalResourceGroup = $vNet.ResourceGroupName
-            PeeringName        = $peering.Name
-            RemoteVNetId       = $peering.RemoteVirtualNetwork.Id
-            AllowVnetAccess    = $peering.AllowVirtualNetworkAccess
+            LocalVNetName         = $vNet.Name
+            LocalResourceGroup    = $vNet.ResourceGroupName
+            PeeringName           = $peering.Name
+            RemoteVNetId          = $peering.RemoteVirtualNetwork.Id
+            AllowVirtualNetworkAccess = $peering.AllowVirtualNetworkAccess
             AllowForwardedTraffic = $peering.AllowForwardedTraffic
-            AllowGatewayTransit = $peering.AllowGatewayTransit
-            UseRemoteGateways  = $peering.UseRemoteGateways
+            AllowGatewayTransit   = $peering.AllowGatewayTransit
+            UseRemoteGateways     = $peering.UseRemoteGateways
         }
     }
 }
 
-# Export to CSV
-$peeringList | Export-Csv -Path C:\CSPARMExports\Boxlight\vnets\NetPeeringsBackup.csv -NoTypeInformation
+$csvPath = Join-Path $OutputDir "NetPeeringsBackup.csv"
+$jsonPath = Join-Path $OutputDir "NetPeeringsBackup.json"
 
-Write-Output "Exported all VNet peerings to VNetPeeringsBackup.csv"
+$peeringList | Export-Csv -Path $csvPath -NoTypeInformation -Encoding utf8
+$peeringList | ConvertTo-Json -Depth 5 | Out-File -FilePath $jsonPath -Encoding utf8
+
+Write-Host "✅ Exported $($peeringList.Count) VNet peering(s) to:" -ForegroundColor Green
+Write-Host "  CSV : $csvPath" -ForegroundColor Cyan
+Write-Host "  JSON: $jsonPath" -ForegroundColor Cyan

@@ -1,120 +1,97 @@
+<#
+.SYNOPSIS
+    Inventories all Managed Identities (System-Assigned & User-Assigned) and exports
+    the RBAC permissions held BY those identities across the subscription.
+.DESCRIPTION
+    Captures ResourceId, IdentityType, PrincipalId, and all role assignments where
+    the Managed Identity is the Assignee. Used by 4-DisableMIdentities, 4-A-RecreateMIdentities,
+    and 5-RestoreRoleAssignments to automatically remap permissions after migration.
+#>
 
+$paramsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "migration-params.ps1"
+if (Test-Path $paramsPath) { . $paramsPath }
 
-## DESCRIPTION: Inventories all managed identities (system-assigned and user-assigned) across
-##              VMs, App Services, Application Gateways, Function Apps, and SQL Servers.
-##              Exports resource identity details and RBAC assignments to CSV files.
-## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
-##              2. Run in PowerShell with the Az module installed.
-##              3. Output CSVs are used by 4-DisableMIdentities.ps1 and 4-A-RecreateMIdentities.ps1.
-. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+param(
+    [string]$SubscriptionId = $sourceSubscriptionId,
+    [string]$OutputDir      = (Join-Path $backupRootDir "ManagedIdentities")
+)
 
-# Set Subscription (loaded from migration-params.ps1)
-$subscriptionId = $sourceSubscriptionId
-Set-AzContext -SubscriptionId $subscriptionId
+Write-Host "=== Backing up Managed Identities & Permissions ===" -ForegroundColor Cyan
+Set-AzContext -Subscription $SubscriptionId -ErrorAction Stop | Out-Null
 
-# Initialize arrays
+if (-not (Test-Path -Path $OutputDir)) {
+    New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+}
+
 $resourcesWithMI = @()
-$rbacAssignments = @()
+$identityRoleAssignments = @()
 
-# Function to Get RBAC Assignments for a Resource
-function Get-RBACAssignments {
-    param ($resourceId)
+Write-Host "Scanning all resources for Managed Identities..." -ForegroundColor Cyan
+$allResources = Get-AzResource -ExpandProperties -ErrorAction Stop
 
-    $assignments = Get-AzRoleAssignment -Scope $resourceId
-    foreach ($assignment in $assignments) {
-        [PSCustomObject]@{
-            ResourceId      = $resourceId
-            PrincipalName   = $assignment.DisplayName
-            PrincipalId     = $assignment.ObjectId
-            RoleDefinition  = $assignment.RoleDefinitionName
-            RoleDefinitionId = $assignment.RoleDefinitionId
-            AssignmentScope = $assignment.Scope
-            AssignmentType  = if ($assignment.SignInName) { "User/Group" } else { "Service Principal" }
+foreach ($res in $allResources) {
+    if ($res.Identity -and $res.Identity.Type -and $res.Identity.Type -ne "None") {
+        $identType = $res.Identity.Type
+        $principalId = $res.Identity.PrincipalId
+        $tenantId = $res.Identity.TenantId
+
+        # Parse user assigned identities dictionary
+        $userAssignedIds = @()
+        if ($res.Identity.UserAssignedIdentities) {
+            $userAssignedIds = $res.Identity.UserAssignedIdentities.Keys
+        }
+
+        $miEntry = [PSCustomObject]@{
+            ResourceName           = $res.Name
+            ResourceId             = $res.ResourceId
+            ResourceType           = $res.ResourceType
+            ResourceGroupName      = $res.ResourceGroupName
+            IdentityType           = $identType
+            PrincipalId            = $principalId
+            TenantId               = $tenantId
+            UserAssignedIdentities = ($userAssignedIds -join ";")
+        }
+
+        $resourcesWithMI += $miEntry
+        Write-Host "  Found [$identType] on $($res.ResourceType): $($res.Name) (PrincipalId: $principalId)" -ForegroundColor Green
+
+        # Query all RBAC role assignments granted TO this identity (as assignee)
+        if ($principalId) {
+            try {
+                $assignments = Get-AzRoleAssignment -ObjectId $principalId -ErrorAction SilentlyContinue
+                if ($assignments) {
+                    foreach ($a in $assignments) {
+                        $identityRoleAssignments += [PSCustomObject]@{
+                            ResourceName       = $res.Name
+                            ResourceId         = $res.ResourceId
+                            PrincipalId        = $principalId
+                            RoleDefinitionName = $a.RoleDefinitionName
+                            RoleDefinitionId   = $a.RoleDefinitionId
+                            Scope              = $a.Scope
+                            DisplayName        = $a.DisplayName
+                        }
+                    }
+                }
+            } catch {
+                Write-Host "    ⚠️ Could not query role assignments for principal $principalId: $_" -ForegroundColor Yellow
+            }
         }
     }
 }
 
-# Query Virtual Machines (Ensuring Managed Identity is Captured)
-$vmList = Get-AzVM
-foreach ($vm in $vmList) {
-    if ($vm.Identity -and $vm.Identity.Type -ne "None") {
-        $resourcesWithMI += [PSCustomObject]@{
-            ResourceName = $vm.Name
-            ResourceId = $vm.Id
-            ResourceType = "VirtualMachine"
-            IdentityType = $vm.Identity.Type
-            UserAssignedIdentities = ($vm.Identity.UserAssignedIdentities | ConvertTo-Json -Depth 1)
-        }
-        $rbacAssignments += Get-RBACAssignments -resourceId $vm.Id
-    }
-}
+# Export resources
+$resJson = Join-Path $OutputDir "ManagedIdentityResources.json"
+$resCsv  = Join-Path $OutputDir "ManagedIdentityResources.csv"
+$resourcesWithMI | ConvertTo-Json -Depth 5 | Out-File -FilePath $resJson -Encoding utf8
+$resourcesWithMI | Export-Csv -Path $resCsv -NoTypeInformation -Encoding utf8
 
-# Query App Services
-$appList = Get-AzWebApp
-foreach ($app in $appList) {
-    if ($app.Identity -and $app.Identity.Type -ne "None") {
-        $resourcesWithMI += [PSCustomObject]@{
-            ResourceName = $app.Name
-            ResourceId = $app.Id
-            ResourceType = "AppService"
-            IdentityType = $app.Identity.Type
-            UserAssignedIdentities = ($app.Identity.UserAssignedIdentities | ConvertTo-Json -Depth 1)
-        }
-        $rbacAssignments += Get-RBACAssignments -resourceId $app.Id
-    }
-}
+# Export permissions
+$rolesJson = Join-Path $OutputDir "ManagedIdentityRoleAssignments.json"
+$rolesCsv  = Join-Path $OutputDir "ManagedIdentityRoleAssignments.csv"
+$identityRoleAssignments | ConvertTo-Json -Depth 5 | Out-File -FilePath $rolesJson -Encoding utf8
+$identityRoleAssignments | Export-Csv -Path $rolesCsv -NoTypeInformation -Encoding utf8
 
-# Query Application Gateways
-$appGwList = Get-AzApplicationGateway
-foreach ($appGw in $appGwList) {
-    if ($appGw.Identity -and $appGw.Identity.Type -ne "None") {
-        $resourcesWithMI += [PSCustomObject]@{
-            ResourceName = $appGw.Name
-            ResourceId = $appGw.Id
-            ResourceType = "ApplicationGateway"
-            IdentityType = $appGw.Identity.Type
-            UserAssignedIdentities = ($appGw.Identity.UserAssignedIdentities | ConvertTo-Json -Depth 1)
-        }
-        $rbacAssignments += Get-RBACAssignments -resourceId $appGw.Id
-    }
-}
-
-# Query Azure Functions
-$funcList = Get-AzFunctionApp
-foreach ($func in $funcList) {
-    if ($func.Identity -and $func.Identity.Type -ne "None") {
-        $resourcesWithMI += [PSCustomObject]@{
-            ResourceName = $func.Name
-            ResourceId = $func.Id
-            ResourceType = "FunctionApp"
-            IdentityType = $func.Identity.Type
-            UserAssignedIdentities = ($func.Identity.UserAssignedIdentities | ConvertTo-Json -Depth 1)
-        }
-        $rbacAssignments += Get-RBACAssignments -resourceId $func.Id
-    }
-}
-
-# Query Managed Identity-enabled Azure SQL Servers
-$sqlServers = Get-AzSqlServer
-foreach ($sql in $sqlServers) {
-    if ($sql.Identity -and $sql.Identity.Type -ne "None") {
-        $resourcesWithMI += [PSCustomObject]@{
-            ResourceName = $sql.ServerName
-            ResourceId = $sql.Id
-            ResourceType = "SQLServer"
-            IdentityType = $sql.Identity.Type
-            UserAssignedIdentities = ($sql.Identity.UserAssignedIdentities | ConvertTo-Json -Depth 1)
-        }
-        $rbacAssignments += Get-RBACAssignments -resourceId $sql.Id
-    }
-}
-
-# Export Managed Identity Details
-$resourcesWithMI | Export-Csv -Path "C:\temp\AzureMIdentityBackup\ManagedIdentityResources.csv" -NoTypeInformation
-
-# Export RBAC Assignments
-$rbacAssignments | Export-Csv -Path "C:\temp\AzureMIdentityBackup\RBACAssignments.csv" -NoTypeInformation
-
-# Display Summary
-Write-Host "✅ Exported Managed Identities to ManagedIdentityResources.csv"
-Write-Host "✅ Exported RBAC Assignments to RBACAssignments.csv"
+Write-Host "`n✅ Managed Identity inventory completed!" -ForegroundColor Green
+Write-Host "Total Resources with Managed Identities: $($resourcesWithMI.Count)" -ForegroundColor Cyan
+Write-Host "Total Role Assignments held by MIs     : $($identityRoleAssignments.Count)" -ForegroundColor Cyan
+Write-Host "Files saved in: $OutputDir" -ForegroundColor Cyan

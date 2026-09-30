@@ -1,63 +1,90 @@
-## DESCRIPTION: Validates whether all resources in a resource group can be moved to
-##              the destination subscription. Uses the ARM validateMoveResources API.
-##              Run this before executing the migration to surface blockers early.
-## USAGE:       1. Set $resourceGroupName to the RG you want to validate.
-##              2. Source and destination subscriptions are loaded from migration-params.ps1.
-##              3. Run in PowerShell with the Az module installed.
-. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+<#
+.SYNOPSIS
+    Validates whether all resources in a Resource Group can be moved to the destination
+    subscription using the ARM validateMoveResources API.
+.DESCRIPTION
+    Surfaces blockers (unsupported types, active locks, missing providers, etc.)
+    before executing the actual move operation.
+#>
 
-$resourceGroupName = "REPLACE_WITH_RG_NAME"
+$paramsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "migration-params.ps1"
+if (Test-Path $paramsPath) { . $paramsPath }
 
-# ── Resolve destination RG (must exist in destination sub before move) ─────────
-$destinationRGId = "/subscriptions/$destinationSubscriptionId/resourceGroups/$resourceGroupName"
+param(
+    [string]$ResourceGroupName,
+    [string]$TargetSubscriptionId = $destinationSubscriptionId,
+    [switch]$AllResourceGroups
+)
 
-Write-Host "=== RG Move Validation ===" -ForegroundColor Cyan
-Write-Host "Source subscription : $sourceSubscriptionId"
-Write-Host "Destination sub     : $destinationSubscriptionId"
-Write-Host "Resource group      : $resourceGroupName"
-Write-Host ""
+$logFile = Join-Path $logRootDir "ValidateRGMove.log"
 
-try {
-    Set-AzContext -Subscription $sourceSubscriptionId -ErrorAction Stop | Out-Null
-    Write-Host "Context set to source subscription." -ForegroundColor Green
+function Validate-SingleRG {
+    param([string]$rgName)
 
-    $sourceRG = Get-AzResourceGroup -Name $resourceGroupName -ErrorAction Stop
-    $resources = Get-AzResource -ResourceGroupName $resourceGroupName -ErrorAction Stop
+    Write-Host "`n=== Validating Resource Group: $rgName ===" -ForegroundColor Cyan
+    $destinationRGId = "/subscriptions/$TargetSubscriptionId/resourceGroups/$rgName"
 
-    if ($resources.Count -eq 0) {
-        Write-Host "WARNING: No resources found in '$resourceGroupName'. Nothing to validate." -ForegroundColor Yellow
-        exit 0
+    try {
+        $sourceRG  = Get-AzResourceGroup -Name $rgName -ErrorAction Stop
+        $resources = Get-AzResource -ResourceGroupName $rgName -ErrorAction Stop
+
+        if (-not $resources -or $resources.Count -eq 0) {
+            Write-Host "  ⚠️ No resources found in '$rgName'. Nothing to validate." -ForegroundColor Yellow
+            return $true
+        }
+
+        Write-Host "  Found $($resources.Count) resource(s). Calling ARM validateMoveResources..." -ForegroundColor Cyan
+
+        $result = Invoke-AzResourceAction `
+            -Action "validateMoveResources" `
+            -ResourceId $sourceRG.ResourceId `
+            -Parameters @{
+                resources           = [string[]]$resources.ResourceId
+                targetResourceGroup = $destinationRGId
+            } `
+            -Force `
+            -ErrorAction Stop
+
+        Write-Host "  ✅ Validation PASSED — all resources in '$rgName' are ready to move." -ForegroundColor Green
+        Add-Content -Path $logFile -Value "[$((Get-Date).ToString('s'))] [PASS] $rgName ($($resources.Count) resources)"
+        return $true
+
+    } catch {
+        Write-Host "  ❌ Validation FAILED for '$rgName':" -ForegroundColor Red
+        Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
+
+        if ($_.ErrorDetails.Message) {
+            Write-Host "  ARM Error Detail:" -ForegroundColor Yellow
+            try {
+                $_.ErrorDetails.Message | ConvertFrom-Json | ConvertTo-Json -Depth 10 | Write-Host
+            } catch {
+                Write-Host $_.ErrorDetails.Message
+            }
+        }
+        Add-Content -Path $logFile -Value "[$((Get-Date).ToString('s'))] [FAIL] $rgName - $($_.Exception.Message)"
+        return $false
+    }
+}
+
+Set-AzContext -Subscription $sourceSubscriptionId -ErrorAction Stop | Out-Null
+
+if ($AllResourceGroups) {
+    Write-Host "Validating ALL resource groups in subscription $sourceSubscriptionId..." -ForegroundColor Cyan
+    $allRGs = Get-AzResourceGroup
+    $passed = 0
+    $failed = 0
+
+    foreach ($rg in $allRGs) {
+        $ok = Validate-SingleRG -rgName $rg.ResourceGroupName
+        if ($ok) { $passed++ } else { $failed++ }
     }
 
-    Write-Host "Found $($resources.Count) resource(s) to validate." -ForegroundColor Green
-
-    Write-Host ""
-    Write-Host "Calling validateMoveResources — this can take 15-30 seconds..." -ForegroundColor Cyan
-
-    $result = Invoke-AzResourceAction `
-        -Action "validateMoveResources" `
-        -ResourceId $sourceRG.ResourceId `
-        -Parameters @{
-            resources           = $resources.ResourceId
-            targetResourceGroup = $destinationRGId
-        } `
-        -Force `
-        -ErrorAction Stop
-
-    Write-Host ""
-    Write-Host "Validation PASSED — all resources can be moved." -ForegroundColor Green
-
-} catch {
-    Write-Host ""
-    Write-Host "Validation FAILED:" -ForegroundColor Red
-    Write-Host $_.Exception.Message -ForegroundColor Red
-
-    # Surface the inner ARM error detail if available
-    if ($_.ErrorDetails.Message) {
-        Write-Host ""
-        Write-Host "ARM detail:" -ForegroundColor Yellow
-        $_.ErrorDetails.Message | ConvertFrom-Json | ConvertTo-Json -Depth 10 | Write-Host
+    Write-Host "`n=== Validation Summary ===" -ForegroundColor Cyan
+    Write-Host "Passed: $passed" -ForegroundColor Green
+    Write-Host "Failed: $failed" -ForegroundColor $(if ($failed -gt 0) { "Red" } else { "Green" })
+} else {
+    if (-not $ResourceGroupName) {
+        $ResourceGroupName = Read-Host "Enter the Resource Group name to validate"
     }
-
-    exit 1
+    Validate-SingleRG -rgName $ResourceGroupName
 }

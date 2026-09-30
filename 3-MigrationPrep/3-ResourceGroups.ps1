@@ -1,74 +1,80 @@
-## DESCRIPTION: Recreates all resource groups from the source subscription in the destination
-##              subscription, preserving location and tags. Run this early in migration prep
-##              before moving any resources.
-## USAGE:       1. Update subscription IDs in the root migration-params.ps1 file.
-##              2. Uncomment Connect-AzAccount if not already authenticated.
-##              3. Run in PowerShell with the Az module installed.
-##              4. Review C:\temp\AzureResourceGroupMigration.log for results.
-. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+<#
+.SYNOPSIS
+    Recreates all Resource Groups from the source subscription in the destination
+    subscription, preserving locations and tags.
+.DESCRIPTION
+    Must be run before moving resources or recreating infrastructure in Phase 5.
+#>
 
-# Define source and destination subscriptions (loaded from migration-params.ps1)
-$sourceSubscription      = $sourceSubscriptionId
-$destinationSubscription = $destinationSubscriptionId
+$paramsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "migration-params.ps1"
+if (Test-Path $paramsPath) { . $paramsPath }
 
+param(
+    [string]$SourceSub = $sourceSubscriptionId,
+    [string]$DestSub   = $destinationSubscriptionId
+)
 
-# Define log file
-$logFile = "C:\temp\AzureResourceGroupMigration.log"
+$logFile = Join-Path $logRootDir "ResourceGroupRecreation.log"
 
-# Function to log messages
 function Write-Log {
-    param (
-        [string]$message
-    )
+    param([string]$message, [string]$level = "INFO")
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $logMessage = "$timestamp - $message"
-    Write-Host $logMessage
-    Add-Content -Path $logFile -Value $logMessage
+    $line = "[$timestamp] [$level] $message"
+    Write-Host $line -ForegroundColor $(if ($level -eq "ERROR") { "Red" } elseif ($level -eq "WARN") { "Yellow" } else { "Cyan" })
+    Add-Content -Path $logFile -Value $line
 }
 
-
+Write-Log "=== Recreating Resource Groups in Destination Subscription ==="
+Write-Log "Source Subscription     : $SourceSub"
+Write-Log "Destination Subscription: $DestSub"
 
 try {
-    # Log in to Azure
-    Write-Log "Logging in to Azure..."
-    #Connect-AzAccount
-    Write-Log "Azure login successful."
+    # Step 1: Retrieve all resource groups from the source subscription
+    Write-Log "Retrieving resource groups from source..."
+    Set-AzContext -Subscription $SourceSub -ErrorAction Stop | Out-Null
+    $sourceRGs = Get-AzResourceGroup -ErrorAction Stop
 
-    # Step 1: Set context to the source subscription
-    Write-Log "Setting context to source subscription: $sourceSubscription"
-    Set-AzContext -Subscription $sourceSubscription
-
-    # Retrieve all resource groups from the source subscription
-    Write-Log "Retrieving resource groups from the source subscription..."
-    $SourceResourceGroups = Get-AzResourceGroup
-
-    if ($SourceResourceGroups.Count -eq 0) {
-        Write-Log "No resource groups found in the source subscription."
-    } else {
-        Write-Log "Found $($SourceResourceGroups.Count) resource groups."
+    if (-not $sourceRGs -or $sourceRGs.Count -eq 0) {
+        Write-Log "No resource groups found in source subscription." "WARN"
+        exit 0
     }
+    Write-Log "Found $($sourceRGs.Count) resource group(s) in source."
 
-    # Set context to the destination subscription
-    Write-Log "Setting context to destination subscription: $destinationSubscription"
-    Set-AzContext -Subscription $destinationSubscription
+    # Step 2: Switch context to destination subscription
+    Write-Log "Setting context to destination subscription..."
+    Set-AzContext -Subscription $DestSub -ErrorAction Stop | Out-Null
+    $destRGs = Get-AzResourceGroup -ErrorAction SilentlyContinue
+    $destRGNames = [System.Collections.Generic.HashSet[string]]::new([string[]]($destRGs | ForEach-Object { $_.ResourceGroupName }))
 
-    # Recreate resource groups in the target subscription
-    Write-Log "Creating resource groups in the target subscription..."
-    foreach ($ResourceGroup in $SourceResourceGroups) {
+    # Step 3: Recreate RGs
+    foreach ($rg in $sourceRGs) {
+        $rgName   = $rg.ResourceGroupName
+        $location = $rg.Location
+        $tags     = $rg.Tags
+
+        if ($destRGNames.Contains($rgName)) {
+            Write-Log "Resource group '$rgName' already exists in destination. Ensuring tags..." "WARN"
+            if ($tags -and $tags.Count -gt 0) {
+                Update-AzTag -ResourceId "/subscriptions/$DestSub/resourceGroups/$rgName" -Tag $tags -Operation Merge -ErrorAction SilentlyContinue | Out-Null
+            }
+            continue
+        }
+
         try {
-            $ResourceGroupName = $ResourceGroup.ResourceGroupName
-            $Location = $ResourceGroup.Location
-            $Tags = $ResourceGroup.Tags
-
-            Write-Log "Creating Resource Group: $ResourceGroupName in $Location..."
-            New-AzResourceGroup -Name $ResourceGroupName -Location $Location -Tag $Tags
-            Write-Log "Successfully created Resource Group: $ResourceGroupName"
+            Write-Log "Creating Resource Group: '$rgName' in location: '$location'..."
+            if ($tags -and $tags.Count -gt 0) {
+                New-AzResourceGroup -Name $rgName -Location $location -Tag $tags -Force -ErrorAction Stop | Out-Null
+            } else {
+                New-AzResourceGroup -Name $rgName -Location $location -Force -ErrorAction Stop | Out-Null
+            }
+            Write-Log "Successfully created Resource Group: '$rgName'" "SUCCESS"
         } catch {
-            Write-Log "ERROR: Failed to create Resource Group: $ResourceGroupName. Error: $_"
+            Write-Log "ERROR creating Resource Group '$rgName': $_" "ERROR"
         }
     }
 
-    Write-Log "Resource group migration completed successfully."
+    Write-Log "Resource group pre-creation completed successfully." "SUCCESS"
 } catch {
-    Write-Log "ERROR: An unexpected error occurred. Details: $_"
+    Write-Log "Unexpected fatal error: $_" "ERROR"
+    exit 1
 }

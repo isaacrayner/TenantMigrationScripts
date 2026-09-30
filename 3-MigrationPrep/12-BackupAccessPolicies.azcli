@@ -1,42 +1,42 @@
-## DESCRIPTION: Backs up Key Vault access policies for all Key Vaults across all resource groups
-##              to individual JSON files. One file is created per Key Vault.
-## USAGE:       1. Update SUBSCRIPTION_ID with the source subscription ID.
-##              2. Update BACKUP_DIR to your desired output directory.
-##              3. Run in WSL/bash with Azure CLI installed and authenticated.
-##              4. Output JSON files are used by 2-KeyVault.azcli in 7-Recreation.
+#!/bin/bash
+## DESCRIPTION: Backs up Key Vault access policies and RBAC status for all Key Vaults
+##              across all resource groups to migration-data/KeyVaultAccess/.
+## USAGE:       Run in bash/WSL with Azure CLI installed and authenticated.
+
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/../migration-params.sh"
 
-#Recreate the User Assigned Identities at the destination end
-# Set variables
-SUBSCRIPTION_ID="$SOURCE_SUBSCRIPTION_ID"
+KV_BACKUP_DIR="${BACKUP_ROOT_DIR}/KeyVaultAccess"
+mkdir -p "$KV_BACKUP_DIR"
 
-# Ensure Azure CLI is logged in
-az account set --subscription "$SUBSCRIPTION_ID"
+echo "=== Backing up Key Vault Access Policies ==="
+echo "Source Subscription: $SOURCE_SUBSCRIPTION_ID"
 
-# Set backup directory
-BACKUP_DIR="/mnt/c/temp/AzureKVAccessBackup"
+az account set --subscription "$SOURCE_SUBSCRIPTION_ID"
 
-mkdir -p $BACKUP_DIR
+KEYVAULTS=$(az keyvault list --subscription "$SOURCE_SUBSCRIPTION_ID" --query "[].{name:name, rg:resourceGroup}" -o json)
 
-echo "Fetching all resource groups..."
-RESOURCE_GROUPS=$(az group list --query "[].name" -o tsv)
+KV_COUNT=$(echo "$KEYVAULTS" | jq length)
+if [[ "$KV_COUNT" -eq 0 ]]; then
+    echo "No Key Vaults found in subscription."
+    exit 0
+fi
 
-echo "Backing up all Key Vault access policies..."
+echo "Found $KV_COUNT Key Vault(s). Backing up..."
 
-# Backup Key Vault Access Policies
-for RG in $RESOURCE_GROUPS; do
-    echo "Processing Resource Group: $RG"
+echo "$KEYVAULTS" | jq -c '.[]' | while read -r kv; do
+    NAME=$(echo "$kv" | jq -r '.name')
+    RG=$(echo "$kv" | jq -r '.rg')
 
-    # Get all Key Vaults in the Resource Group
-    KEYVAULTS=$(az keyvault list --resource-group $RG --query "[].name" -o tsv)
+    echo "Processing Key Vault: $NAME (RG: $RG)..."
 
-    for KV in $KEYVAULTS; do
-        echo "Backing up access policies for Key Vault: $KV"
+    # Save full properties including RBAC authorization and access policies
+    az keyvault show --name "$NAME" --resource-group "$RG" -o json > "${KV_BACKUP_DIR}/${NAME}_full.json"
+    az keyvault show --name "$NAME" --resource-group "$RG" --query "properties.accessPolicies" -o json > "${KV_BACKUP_DIR}/${NAME}_access_policies.json"
 
-        # Get Key Vault Access Policies
-        az keyvault show --name $KV --resource-group $RG --query "properties.accessPolicies" -o json > "$BACKUP_DIR/${KV}_access_policies.json"
-    done
+    echo "  ✅ Saved policies for: $NAME"
 done
 
-echo "Backup completed! Policies saved in $BACKUP_DIR"
+echo "Key Vault access policies backup completed! Saved in: $KV_BACKUP_DIR"

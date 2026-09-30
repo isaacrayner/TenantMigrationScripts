@@ -1,79 +1,53 @@
+#!/bin/bash
 ## DESCRIPTION: Backs up Azure File Share backup configurations from all Recovery Services Vaults
-##              across all resource groups to a CSV file.
-## USAGE:       1. Update SUBSCRIPTION_ID with the source subscription ID.
-##              2. Update OUTPUT_FILE to your desired output path.
-##              3. Run in WSL/bash with Azure CLI and jq installed and authenticated.
-##              4. Output CSV is used by 6-DisableSABackups.azcli and 9-SABackups.azcli.
+##              across all resource groups to migration-data/BackupSettings/storage-backup.csv.
+## USAGE:       Run in bash/WSL with Azure CLI and jq installed and authenticated.
+
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/../migration-params.sh"
 
-##### Backup Storage Account Backup Configurations #####
-#!/bin/bash
+OUTPUT_DIR="${BACKUP_ROOT_DIR}/BackupSettings"
+OUTPUT_FILE="${OUTPUT_DIR}/storage-backup.csv"
+mkdir -p "$OUTPUT_DIR"
 
-# Set variables
-SUBSCRIPTION_ID="$SOURCE_SUBSCRIPTION_ID"
-OUTPUT_FILE="/mnt/c/temp/AzureStorageBackupSettingsBackup/storage-backup.csv"
+echo "=== Backing up Storage Account & File Share Backup Settings ==="
+echo "Source Subscription: $SOURCE_SUBSCRIPTION_ID"
 
+az account set --subscription "$SOURCE_SUBSCRIPTION_ID"
 
-# Ensure Azure CLI is logged in
-az account set --subscription "$SUBSCRIPTION_ID"
+echo "StorageAccountName,FileShareName,FriendlyName,ResourceId,ResourceGroup,VaultName,PolicyName,PolicyId" > "$OUTPUT_FILE"
 
-# Create CSV with headers
-echo "StorageAccountName,FileShareName,FriendlyName,ResourceId,VaultName,PolicyName,PolicyId" > "$OUTPUT_FILE"
-
-# Get all Resource Groups
 RESOURCE_GROUPS=$(az group list --query "[].name" -o tsv)
 
-# Loop through each Resource Group
-for RESOURCE_GROUP in $RESOURCE_GROUPS; do
-    echo "🔍 Checking Resource Group: $RESOURCE_GROUP"
+for RG in $RESOURCE_GROUPS; do
+    VAULTS=$(az backup vault list --resource-group "$RG" --query "[].name" -o tsv 2>/dev/null || true)
+    [[ -z "$VAULTS" ]] && continue
 
-    # Get all Recovery Services Vaults in the Resource Group
-    VAULTS=$(az backup vault list --resource-group "$RESOURCE_GROUP" --query "[].name" -o tsv 2>/dev/null)
-
-    if [[ -z "$VAULTS" ]]; then
-        echo "⚠ No vaults found in RG: $RESOURCE_GROUP. Skipping..."
-        continue
-    fi
-
-    # Loop through each vault in the resource group
     for VAULT in $VAULTS; do
-        echo "🔍 Checking Recovery Services Vault: $VAULT in RG: $RESOURCE_GROUP"
+        echo "Checking Vault: $VAULT in RG: $RG..."
 
-        # Get all Azure File Share backups
-        BACKUP_ITEMS=$(az backup item list --vault-name "$VAULT" --resource-group "$RESOURCE_GROUP" --query "[?properties.workloadType=='AzureFileShare']" -o json 2>/dev/null)
+        BACKUP_ITEMS=$(az backup item list --vault-name "$VAULT" --resource-group "$RG" \
+            --query "[?properties.workloadType=='AzureFileShare']" -o json 2>/dev/null || true)
 
-        # Check if backup items exist
-        BACKUP_COUNT=$(echo "$BACKUP_ITEMS" | jq length)
-        if [[ -z "$BACKUP_ITEMS" || "$BACKUP_COUNT" -eq 0 ]]; then
-            echo "⚠ No Azure File Share backups found in $VAULT. Skipping..."
+        if [[ -z "$BACKUP_ITEMS" || "$BACKUP_ITEMS" == "[]" ]]; then
             continue
         fi
 
-        # Process each backup item
         echo "$BACKUP_ITEMS" | jq -c '.[]' | while read -r ITEM; do
-            # Extract Storage Account Name from `sourceResourceId`
             STORAGE_ACCOUNT=$(echo "$ITEM" | jq -r '.properties.sourceResourceId' | awk -F'/' '{print $(NF)}')
-
-            # Extract File Share Name from `friendlyName`
             FILE_SHARE_NAME=$(echo "$ITEM" | jq -r '.properties.friendlyName')
-
-            # Extract Resource ID
             RESOURCE_ID=$(echo "$ITEM" | jq -r '.properties.sourceResourceId')
-
-            # Get Backup Policy Info
             POLICY_NAME=$(echo "$ITEM" | jq -r '.properties.policyName // "Unknown"')
             POLICY_ID=$(echo "$ITEM" | jq -r '.properties.policyId // "Unknown"')
 
-            # Ensure values are valid before appending to CSV
             if [[ -n "$STORAGE_ACCOUNT" && -n "$FILE_SHARE_NAME" && -n "$RESOURCE_ID" ]]; then
-                echo "📌 Saving backup configuration: Storage Account: $STORAGE_ACCOUNT, File Share: $FILE_SHARE_NAME"
-                echo "$STORAGE_ACCOUNT,$FILE_SHARE_NAME,$FILE_SHARE_NAME,$RESOURCE_ID,$VAULT,$POLICY_NAME,$POLICY_ID" >> "$OUTPUT_FILE"
-            else
-                echo "⚠ Skipping invalid backup entry (missing values)"
+                echo "  Found backup: $STORAGE_ACCOUNT / $FILE_SHARE_NAME (Policy: $POLICY_NAME)"
+                echo "$STORAGE_ACCOUNT,$FILE_SHARE_NAME,$FILE_SHARE_NAME,$RESOURCE_ID,$RG,$VAULT,$POLICY_NAME,$POLICY_ID" >> "$OUTPUT_FILE"
             fi
         done
     done
 done
 
-echo "✅ Backup configuration exported to: $OUTPUT_FILE"
+echo "✅ Storage backup configurations exported to: $OUTPUT_FILE"

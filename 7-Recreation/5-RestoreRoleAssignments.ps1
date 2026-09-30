@@ -1,80 +1,111 @@
-## DESCRIPTION: Restores RBAC role assignments in the destination subscription from the JSON
-##              backup produced by 3-MigrationPrep/4-ListRoleAssignmentsv2.ps1.
-##              Rewrites all scope paths to the destination subscription ID.
-##              Skips assignments that cannot be recreated (managed identity system principals,
-##              out-of-subscription scopes, and principals that no longer exist).
-## USAGE:       1. Run 3-MigrationPrep/4-ListRoleAssignmentsv2.ps1 first to produce the backup.
-##              2. For cross-tenant migrations: ensure you are logged in to the destination
-##                 tenant before running (Connect-AzAccount -TenantId <destTenantId>).
-##              3. Managed identities get new ObjectIds after recreation — run
-##                 7-Recreation/4-A-RecreateMIdentities.ps1 first, then reassign their roles
-##                 manually using the CSV from 3-MigrationPrep/11-BackupIdentities.ps1.
-##              4. Run in PowerShell with the Az module installed.
-. (Join-Path $PSScriptRoot "..\migration-params.ps1")
+<#
+.SYNOPSIS
+    Restores RBAC role assignments in the destination subscription from the JSON backup.
+.DESCRIPTION
+    1. Rewrites scope paths to the destination subscription ID.
+    2. Translates Old System-Assigned Managed Identity IDs to New IDs using NewManagedIdentitiesMapping.json.
+    3. Translates Old User/Group/ServicePrincipal IDs to Target Tenant IDs using Identity_Mapping_Plan.csv (for cross-tenant moves).
+    4. Applies role assignments idempotently in the destination subscription.
+#>
 
-$backupJson = "C:\temp\RBAC_Assignments.json"
-$logFile    = "C:\temp\RBAC_Restore.log"
+$paramsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "migration-params.ps1"
+if (Test-Path $paramsPath) { . $paramsPath }
+
+param(
+    [string]$SubscriptionId  = $destinationSubscriptionId,
+    [string]$BackupJson      = (Join-Path $backupRootDir "RBAC_Assignments.json"),
+    [string]$MappingFile     = (Join-Path $backupRootDir "ManagedIdentities/NewManagedIdentitiesMapping.json"),
+    [string]$IdentityPlanCsv = (Join-Path $backupRootDir "Planning/Identity_Mapping_Plan.csv")
+)
+
+$logFile = Join-Path $logRootDir "RBAC_Restore.log"
 
 function Write-Log {
     param([string]$message, [string]$level = "INFO")
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $line = "$timestamp [$level] $message"
+    $line = "[$timestamp] [$level] $message"
     Write-Host $line -ForegroundColor $(if ($level -eq "ERROR") { "Red" } elseif ($level -eq "WARN") { "Yellow" } else { "Cyan" })
     Add-Content -Path $logFile -Value $line
 }
 
-# ── Validate backup file ───────────────────────────────────────────────────────
-if (-not (Test-Path $backupJson)) {
-    Write-Log "Backup file not found: $backupJson" "ERROR"
-    Write-Log "Run 3-MigrationPrep/4-ListRoleAssignmentsv2.ps1 first." "ERROR"
-    exit 1
+if (-not (Test-Path $BackupJson)) {
+    # Check alternate planning path
+    $altJson = Join-Path $backupRootDir "Planning/Master_RBAC_Assignments.json"
+    if (Test-Path $altJson) {
+        $BackupJson = $altJson
+    } else {
+        Write-Log "Backup file not found: $BackupJson. Run 3-MigrationPrep/4-ListRoleAssignmentsv2.ps1 or 0-Planning/1-ExportAllPermissions.ps1 first." "ERROR"
+        exit 1
+    }
 }
 
-Write-Log "=== RBAC Role Assignment Restore ==="
-Write-Log "Source subscription : $sourceSubscriptionId"
-Write-Log "Destination sub     : $destinationSubscriptionId"
-Write-Log "Backup file         : $backupJson"
+Write-Log "=== Restoring RBAC Role Assignments ==="
+Write-Log "Source Subscription     : $sourceSubscriptionId"
+Write-Log "Destination Subscription: $SubscriptionId"
 
-Write-Log "NOTE: System-assigned managed identity role assignments will fail with PrincipalNotFound — this is expected." "WARN"
-Write-Log "      After running 7-Recreation/4-A-RecreateMIdentities.ps1, reassign those roles manually using" "WARN"
-Write-Log "      the ObjectIds shown in the new subscription (Get-AzVM | Select Name, Identity)." "WARN"
+# Master translation mapping
+$idMap = @{}
 
-# ── Set context to destination ─────────────────────────────────────────────────
-try {
-    Set-AzContext -Subscription $destinationSubscriptionId -ErrorAction Stop | Out-Null
-    Write-Log "Context set to destination subscription."
-} catch {
-    Write-Log "Failed to set subscription context: $_" "ERROR"
-    exit 1
+# 1. Load System Managed Identity translation
+if (Test-Path $MappingFile) {
+    $mappings = Get-Content $MappingFile -Raw | ConvertFrom-Json
+    foreach ($m in $mappings) {
+        if ($m.OldPrincipalId -and $m.NewPrincipalId) {
+            $idMap[$m.OldPrincipalId] = $m.NewPrincipalId
+        }
+    }
+    Write-Log "Loaded $($mappings.Count) Managed Identity PrincipalId translation mappings." "SUCCESS"
 }
 
-# ── Load and process backup ────────────────────────────────────────────────────
-$assignments = Get-Content $backupJson -Raw | ConvertFrom-Json
+# 2. Load Cross-Tenant Identity Plan mapping (Users, Groups, SPs)
+if (Test-Path $IdentityPlanCsv) {
+    $planEntries = Import-Csv -Path $IdentityPlanCsv
+    $planCount = 0
+    foreach ($p in $planEntries) {
+        if ($p.SourceObjectId -and $p.TargetObjectId -and $p.TargetObjectId -ne $p.SourceObjectId) {
+            $idMap[$p.SourceObjectId] = $p.TargetObjectId
+            $planCount++
+        }
+    }
+    if ($planCount -gt 0) {
+        Write-Log "Loaded $planCount Cross-Tenant PrincipalId translation mappings from Identity Planning Plan." "SUCCESS"
+    }
+}
 
-$counts = @{ Total = 0; Skipped = 0; Applied = 0; Failed = 0 }
+# Set context to destination
+Set-AzContext -Subscription $SubscriptionId -ErrorAction Stop | Out-Null
+
+$assignments = Get-Content $BackupJson -Raw | ConvertFrom-Json
+$counts = @{ Total = 0; Skipped = 0; Applied = 0; Failed = 0; Remapped = 0 }
 
 foreach ($a in $assignments) {
     $counts.Total++
-
     $originalScope = $a.Scope
     $role          = $a.RoleDefinitionName
     $displayName   = $a.DisplayName
     $objectId      = $a.ObjectId
-    $principalType = $a.ObjectType   # User, Group, ServicePrincipal
+    $principalType = $a.ObjectType
 
-    # ── Rewrite scope: swap old sub ID for new sub ID ─────────────────────────
+    # Rewrite scope: swap old sub ID for new sub ID
     $newScope = $originalScope -replace [regex]::Escape($sourceSubscriptionId), $destinationSubscriptionId
 
-    # ── Skip: scope is outside the subscription (management group, tenant root) ─
+    # Skip scopes outside subscription
     if ($newScope -notmatch "^/subscriptions/$destinationSubscriptionId") {
         Write-Log "SKIP [$role] '$displayName' — scope outside target subscription: $originalScope" "WARN"
         $counts.Skipped++
         continue
     }
 
-    # ── Apply the assignment ───────────────────────────────────────────────────
+    # Check if ObjectId should be translated via Managed Identity mapping or Identity Plan
+    if ($idMap.ContainsKey($objectId)) {
+        $translatedId = $idMap[$objectId]
+        Write-Log "REMAPPING: Principal '$displayName' ($objectId -> $translatedId)" "INFO"
+        $objectId = $translatedId
+        $counts.Remapped++
+    }
+
+    # Apply assignment
     try {
-        # Idempotency check — skip if assignment already exists
         $existing = Get-AzRoleAssignment -ObjectId $objectId -RoleDefinitionName $role -Scope $newScope -ErrorAction SilentlyContinue
         if ($existing) {
             Write-Log "SKIP [$role] '$displayName' at '$newScope' — already exists." "WARN"
@@ -88,17 +119,16 @@ foreach ($a in $assignments) {
             -Scope              $newScope `
             -ErrorAction        Stop | Out-Null
 
-        Write-Log "OK   [$role] '$displayName' ($principalType) at '$newScope'"
+        Write-Log "OK   [$role] '$displayName' ($principalType) at '$newScope'" "SUCCESS"
         $counts.Applied++
 
     } catch {
         $errMsg = $_.Exception.Message
         if ($errMsg -match "PrincipalNotFound") {
-            Write-Log "FAIL [$role] '$displayName' ($objectId) — principal not found. If this is a system-assigned managed identity, its ObjectId changed after recreation. Reassign manually once MIs are re-enabled." "ERROR"
+            Write-Log "FAIL [$role] '$displayName' ($objectId) — PrincipalNotFound. If this is a cross-tenant move, ensure target principal exists and is mapped in 0-Planning/Identity_Mapping_Plan.csv." "ERROR"
         } elseif ($errMsg -match "RoleAssignmentExists") {
-            Write-Log "SKIP [$role] '$displayName' — assignment already exists." "WARN"
+            Write-Log "SKIP [$role] '$displayName' — already exists." "WARN"
             $counts.Skipped++
-            $counts.Failed--   # don't count as failure
         } else {
             Write-Log "FAIL [$role] '$displayName' at '$newScope' — $errMsg" "ERROR"
         }
@@ -106,16 +136,10 @@ foreach ($a in $assignments) {
     }
 }
 
-# ── Summary ────────────────────────────────────────────────────────────────────
-Write-Log ""
-Write-Log "=== Restore Summary ==="
-Write-Log "Total assignments in backup : $($counts.Total)"
-Write-Log "Applied                     : $($counts.Applied)"
-Write-Log "Skipped                     : $($counts.Skipped)"
-Write-Log "Failed                      : $($counts.Failed)"
-Write-Log "Log file                    : $logFile"
-
-if ($counts.Failed -gt 0) {
-    Write-Log "Some assignments failed. Review the log and reassign manually." "WARN"
-    exit 1
-}
+Write-Log "`n=== Restore Summary ==="
+Write-Log "Total in backup : $($counts.Total)"
+Write-Log "Applied         : $($counts.Applied)"
+Write-Log "Remapped (Auto) : $($counts.Remapped)"
+Write-Log "Skipped         : $($counts.Skipped)"
+Write-Log "Failed          : $($counts.Failed)"
+Write-Log "Log file        : $logFile"

@@ -1,48 +1,58 @@
+<#
+.SYNOPSIS
+    Exports ARM templates for every individual resource in every resource group
+    to a structured local directory, organised by Resource Group name.
+.DESCRIPTION
+    Skips resources already exported so the script is safe to rerun if interrupted.
+#>
 
-## DESCRIPTION: Exports ARM templates for every individual resource in every resource group to
-##              a local directory, organised by resource group name.
-## USAGE:       1. Update the tenant ID in Connect-AzAccount and the subscription ID in Set-AzContext.
-##              2. Update $baseOutputDirectory to your desired local export path.
-##              3. Run in PowerShell with the Az module installed.
-. (Join-Path $PSScriptRoot ".\..\migration-params.ps1")
+$paramsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "migration-params.ps1"
+if (Test-Path $paramsPath) { . $paramsPath }
 
-# Log in to Azure
-Connect-AzAccount -TenantId $sourceTenantId
-Set-AzContext -Subscription $sourceSubscriptionId
+param(
+    [string]$SubscriptionId = $sourceSubscriptionId,
+    [string]$BaseOutputDirectory = (Join-Path $backupRootDir "ARMExports/Resources")
+)
 
-# Define the base output directory
-$baseOutputDirectory = "C:\CSPARMExports\Boxlight\RGExports"
+Write-Host "=== Exporting Individual ARM Resource Templates ===" -ForegroundColor Cyan
+Set-AzContext -Subscription $SubscriptionId -ErrorAction Stop | Out-Null
 
-# Get a list of all resource groups
-$resourceGroups = Get-AzResourceGroup
+if (-not (Test-Path -Path $BaseOutputDirectory)) {
+    New-Item -ItemType Directory -Path $BaseOutputDirectory -Force | Out-Null
+}
 
-# Loop through each resource group
+$resourceGroups = Get-AzResourceGroup -ErrorAction Stop
+
 foreach ($rg in $resourceGroups) {
-    # Define the resource group name
     $resourceGroupName = $rg.ResourceGroupName
+    $rgOutputDirectory = Join-Path -Path $BaseOutputDirectory -ChildPath $resourceGroupName
 
-    # Define the output directory for this resource group
-    $rgOutputDirectory = Join-Path -Path $baseOutputDirectory -ChildPath $resourceGroupName
-
-    # Ensure the resource group output directory exists
-    if (!(Test-Path -Path $rgOutputDirectory)) {
-        New-Item -ItemType Directory -Path $rgOutputDirectory | Out-Null
+    if (-not (Test-Path -Path $rgOutputDirectory)) {
+        New-Item -ItemType Directory -Path $rgOutputDirectory -Force | Out-Null
     }
 
-    # Get all resources in the resource group
     $resources = Get-AzResource -ResourceGroupName $resourceGroupName
 
-    # Loop through each resource in the resource group
     foreach ($resource in $resources) {
-        # Define the output file path (resource name with .json extension in the RG-specific directory)
-        $outputFile = Join-Path -Path $rgOutputDirectory -ChildPath "$($resource.Name).json"
+        $safeName = ($resource.Name -replace '[^a-zA-Z0-9_\-\.]', '_')
+        $outputFile = Join-Path -Path $rgOutputDirectory -ChildPath "$safeName.json"
 
-        # Export the resource template
-        Export-AzResourceGroup `
-            -ResourceGroupName $resourceGroupName `
-            -Resource $resource.ResourceId `
-            -Path $outputFile
+        if (Test-Path -Path $outputFile) {
+            Write-Host "  [SKIP] File already exists for $($resource.Name)" -ForegroundColor Gray
+            continue
+        }
 
-        Write-Host "Exported $($resource.Name) in $resourceGroupName to $outputFile"
+        try {
+            Export-AzResourceGroup `
+                -ResourceGroupName $resourceGroupName `
+                -Resource $resource.ResourceId `
+                -Path $outputFile -Force -ErrorAction Stop
+
+            Write-Host "  [EXPORT] $($resource.Name) -> $outputFile" -ForegroundColor Green
+        } catch {
+            Write-Host "  [ERROR] Failed to export $($resource.Name): $_" -ForegroundColor Red
+        }
     }
 }
+
+Write-Host "`nResource export complete. Output directory: $BaseOutputDirectory" -ForegroundColor Green
