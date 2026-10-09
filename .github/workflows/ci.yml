@@ -12,8 +12,11 @@ jobs:
       - name: Checkout Repo
         uses: actions/checkout@v4
 
+      - name: Install cowsay
+        run: sudo apt-get install cowsay -y
+
       - name: Generate ASCII
-        run: cowsay -f dragon "If youre here, Im guessing youre as lazy as me" >> dragon.txt
+        run: cowsay -f dragon "If youre here, Im guessing youre as lazy as me"
 
       - name: Install test tooling
         shell: pwsh
