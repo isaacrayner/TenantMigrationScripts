@@ -1,6 +1,8 @@
 ## MIGRATION PARAMETERS FILE (PowerShell)
 ## ─────────────────────────────────────────────────────────────────────────────
-## Update the parameters below for each migration project.
+## Update the parameters below for each migration project, or (recommended) copy
+## this file's values into an untracked 'migration-params.local.ps1' so real tenant
+## and subscription IDs never get committed.
 ## All PowerShell scripts in this repo dot-source this file automatically.
 ## ─────────────────────────────────────────────────────────────────────────────
 
@@ -11,6 +13,11 @@ $destinationTenantId       = ""     # Set if migrating to a different Microsoft 
 # ── Subscription Configuration ────────────────────────────────────────────────
 $sourceSubscriptionId      = "00000000-0000-0000-0000-000000000000"
 $destinationSubscriptionId = ""
+
+# ── Local overrides (untracked) ───────────────────────────────────────────────
+# Real IDs belong in migration-params.local.ps1, which .gitignore excludes.
+$localParams = Join-Path $PSScriptRoot "migration-params.local.ps1"
+if (Test-Path $localParams) { . $localParams }
 
 # ── Storage & Output Paths ────────────────────────────────────────────────────
 # Centralized directory for all backups, JSON/CSV state files, and execution logs.

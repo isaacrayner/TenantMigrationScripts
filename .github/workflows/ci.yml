@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install test tooling
+        shell: pwsh
+        run: Install-Module Pester, PSScriptAnalyzer -Scope CurrentUser -Force -SkipPublisherCheck
+
+      - name: Repository checks and Pester suite
+        run: tests/run-tests.sh
+
+      - name: ShellCheck (errors only)
+        run: git ls-files '*.sh' | xargs shellcheck --severity=error

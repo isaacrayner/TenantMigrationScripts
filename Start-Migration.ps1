@@ -1,268 +1,272 @@
 <#
 .SYNOPSIS
-    Interactive Orchestrator for Azure Subscription & Tenant Migration.
+    Interactive, state-aware orchestrator for an Azure subscription / tenant migration.
 .DESCRIPTION
-    Provides a guided, state-aware workflow that automatically inspects
-    migration-data to detect completed phases and suggest the next recommended action.
+    Phases map 1:1 to the numbered folders in this repository (00-Planning ... 06-Restore).
+    The menu inspects ./migration-data to work out which phases are complete and recommends
+    the next one. Pressing Enter runs the recommended phase; choosing a phase runs every
+    default script in that folder in numeric order, or lets you pick a single script.
+.PARAMETER Phase
+    Run one phase non-interactively (0-6) and exit. Destructive phases still ask for YES
+    unless -Force is given.
+.PARAMETER Setup
+    Create the untracked migration-params.local.ps1 / .sh files, then exit.
+.PARAMETER Force
+    Skip the YES confirmation on destructive phases (4 - Cleanup, 5 - Migrate).
+.EXAMPLE
+    ./Start-Migration.ps1                 # interactive menu
+.EXAMPLE
+    ./Start-Migration.ps1 -Phase 3        # run every default Backup script
 #>
+[CmdletBinding()]
+param(
+    [ValidateRange(-1, 6)][int]$Phase = -1,
+    [switch]$Setup,
+    [switch]$Force
+)
 
 $paramsPath = Join-Path $PSScriptRoot "migration-params.ps1"
 if (Test-Path $paramsPath) { . $paramsPath }
 
+$ZeroGuid = "00000000-0000-0000-0000-000000000000"
+
+# ── Phase catalogue ───────────────────────────────────────────────────────────
+# Mode  All  : Enter runs every default script in order.
+#       Pick : scripts are alternatives (e.g. same-tenant move vs directory transfer), choose one.
+# Optional scripts are skipped by "run all" but can still be picked individually.
+# Requires: a script that only makes sense when a config value is set.
+$Phases = @(
+    @{ Id = 0; Folder = "00-Planning";           Mode = "All";  Destructive = $false
+       Title = "Planning: export permissions, map identities, compare quotas"
+       Optional = @("05-ExportPrincipalInventory.ps1")
+       Requires = @{ "03-ResolveTargetIdentities.ps1" = { $destinationTenantId }
+                     "04-CompareSubscriptionQuotas.ps1" = { $destinationSubscriptionId } } },
+    @{ Id = 1; Folder = "01-Preflight";          Mode = "All";  Destructive = $false
+       Title = "Pre-flight: find migration blockers and encrypted disks"
+       Optional = @("03-GrantCspForeignPrincipal.ps1") },
+    @{ Id = 2; Folder = "02-PrepareDestination"; Mode = "All";  Destructive = $false
+       Title = "Prepare destination: sync resource providers, create resource groups"
+       Requires = @{ "01-SyncResourceProviders.ps1" = { $destinationSubscriptionId }
+                     "02-CreateResourceGroups.ps1"  = { $destinationSubscriptionId } } },
+    @{ Id = 3; Folder = "03-Backup";             Mode = "All";  Destructive = $false
+       Title = "Backup: snapshot RBAC, identities, networking, backups, alerts, ARM templates"
+       Optional = @("18-ExportArmTemplatesByResource.ps1", "19-UploadArmTemplatesToBlob.ps1") },
+    @{ Id = 4; Folder = "04-Cleanup";            Mode = "All";  Destructive = $true
+       Title = "Cleanup: disable backups, detach identities, delete peerings and endpoints"
+       Optional = @("08-DeleteBlockingResources.ps1") },
+    @{ Id = 5; Folder = "05-Migrate";            Mode = "Pick"; Destructive = $true
+       Title = "Migrate: validate and move resource groups, or transfer the directory" },
+    @{ Id = 6; Folder = "06-Restore";            Mode = "All";  Destructive = $false
+       Title = "Restore: recreate everything in the destination, remapping identities"
+       Optional = @("19-DeployArmTemplate.ps1") }
+)
+
+# ── State ─────────────────────────────────────────────────────────────────────
 function Get-PhaseState {
-    $state = @{
-        PhaseP = "PENDING"
-        Phase0 = "PENDING"
-        Phase1 = "PENDING"
-        Phase2 = "PENDING"
-        Phase3 = "PENDING"
-        Phase4 = "PENDING"
-        Phase5 = "PENDING"
-        Next   = "P"
+    $has = { param($rel) Test-Path (Join-Path $backupRootDir $rel) }
+    $backedUp = (& $has "RBAC_Assignments.json") -and (& $has "ResourceLocks_Backup.json")
+    $status = @{
+        0 = if (& $has "Planning/Master_RBAC_Assignments.json") { "DONE" } else { "PENDING" }
+        1 = if (& $has "PreMigration_Blocker_Report.json")      { "DONE" } else { "PENDING" }
+        2 = if ($backedUp)                                       { "DONE" } else { "PENDING" }
+        3 = if ($backedUp)                                       { "DONE" } else { "PENDING" }
+        4 = if (& $has "public_ips_associations.json")           { "DONE" } else { "PENDING" }
+        5 = "PENDING"
+        6 = "PENDING"
     }
-
-    # Phase P check
-    if (Test-Path (Join-Path $backupRootDir "Planning/Master_RBAC_Assignments.json")) {
-        $state.PhaseP = "DONE"
-        $state.Next = "0"
+    if (& $has "ManagedIdentities/NewManagedIdentitiesMapping.json") {
+        $status[5] = "DONE"
+        $status[6] = "IN_PROGRESS"
     }
-
-    # Phase 0 check
-    if (Test-Path (Join-Path $backupRootDir "PreMigration_Blocker_Report.json")) {
-        $state.Phase0 = "DONE"
-        if ($state.Next -eq "0") { $state.Next = "1" }
-    }
-
-    # Phase 2 Backup check
-    if ((Test-Path (Join-Path $backupRootDir "RBAC_Assignments.json")) -and 
-        (Test-Path (Join-Path $backupRootDir "ResourceLocks_Backup.json"))) {
-        $state.Phase2 = "DONE"
-        if ($state.Phase1 -eq "PENDING") { $state.Phase1 = "DONE" }
-        if ($state.Next -eq "1" -or $state.Next -eq "2") { $state.Next = "3" }
-    }
-
-    # Phase 3 Cleanup check
-    if (Test-Path (Join-Path $backupRootDir "public_ips_associations.json")) {
-        $state.Phase3 = "DONE"
-        if ($state.Next -eq "3") { $state.Next = "4" }
-    }
-
-    # Phase 5 Restore check
-    if (Test-Path (Join-Path $backupRootDir "ManagedIdentities/NewManagedIdentitiesMapping.json")) {
-        $state.Phase4 = "DONE"
-        $state.Phase5 = "IN_PROGRESS"
-        $state.Next = "5"
-    }
-
-    return $state
+    $next = 0..6 | Where-Object { $status[$_] -ne "DONE" } | Select-Object -First 1
+    [pscustomobject]@{ Status = $status; Next = $next }
 }
 
-function Show-Header {
-    param($state)
+function Test-IsPlaceholder($value) { [string]::IsNullOrWhiteSpace($value) -or $value -eq $ZeroGuid }
+
+# ── First-run setup ───────────────────────────────────────────────────────────
+function Invoke-Setup {
+    Write-Host "`nFirst-run setup: values are written to untracked local files (git-ignored)." -ForegroundColor Cyan
+    $st = Read-Host "Source tenant ID"
+    $ss = Read-Host "Source subscription ID"
+    $dt = Read-Host "Destination tenant ID (Enter = same tenant)"
+    $ds = Read-Host "Destination subscription ID (Enter = decide later)"
+
+    @(
+        "# Local overrides - untracked. Generated by Start-Migration.ps1 -Setup",
+        "`$sourceTenantId            = `"$st`"",
+        "`$destinationTenantId       = `"$dt`"",
+        "`$sourceSubscriptionId      = `"$ss`"",
+        "`$destinationSubscriptionId = `"$ds`""
+    ) | Set-Content -Path (Join-Path $PSScriptRoot "migration-params.local.ps1") -Encoding utf8
+
+    @(
+        "# Local overrides - untracked. Generated by Start-Migration.ps1 -Setup",
+        "SOURCE_TENANT_ID=`"$st`"",
+        "DESTINATION_TENANT_ID=`"$dt`"",
+        "SOURCE_SUBSCRIPTION_ID=`"$ss`"",
+        "DESTINATION_SUBSCRIPTION_ID=`"$ds`""
+    ) | Set-Content -Path (Join-Path $PSScriptRoot "migration-params.local.sh") -Encoding utf8NoBOM
+
+    . $paramsPath
+    Write-Host "Saved migration-params.local.ps1 and migration-params.local.sh" -ForegroundColor Green
+}
+
+function Test-Prerequisites {
+    $missing = @()
+    if (-not (Get-Module -ListAvailable -Name Az.Accounts)) { $missing += "Az PowerShell module  (Install-Module Az -Scope CurrentUser)" }
+    if (-not (Get-Command az   -ErrorAction SilentlyContinue)) { $missing += "Azure CLI 'az'        (https://aka.ms/installazurecli)" }
+    if (-not (Get-Command bash -ErrorAction SilentlyContinue)) { $missing += "bash                  (needed for the .sh scripts; use WSL on Windows)" }
+    if (-not (Get-Command jq   -ErrorAction SilentlyContinue)) { $missing += "jq                    (needed for the .sh scripts)" }
+    if ($missing) {
+        Write-Host "`nMissing prerequisites:" -ForegroundColor Yellow
+        $missing | ForEach-Object { Write-Host "  - $_" -ForegroundColor Yellow }
+    }
+}
+
+# ── Running scripts ───────────────────────────────────────────────────────────
+function Get-PhaseScripts($ph) {
+    Get-ChildItem -Path (Join-Path $PSScriptRoot $ph.Folder) -File |
+        Where-Object { $_.Extension -in ".ps1", ".sh" } |
+        Sort-Object Name |
+        ForEach-Object {
+            $req = $ph.Requires -and $ph.Requires.ContainsKey($_.Name)
+            [pscustomobject]@{
+                Name     = $_.Name
+                Path     = $_.FullName
+                Optional = $ph.Optional -contains $_.Name
+                Blocked  = $req -and (Test-IsPlaceholder (& $ph.Requires[$_.Name]))
+            }
+        }
+}
+
+function Invoke-MigrationScript($script, [hashtable]$ScriptArgs = @{}) {
+    Write-Host "`n--- $($script.Name) ---" -ForegroundColor Cyan
+    if ($script.Name.EndsWith(".sh")) {
+        if (-not (Get-Command bash -ErrorAction SilentlyContinue)) {
+            Write-Host "bash not found - skipping $($script.Name)" -ForegroundColor Yellow
+            return
+        }
+        & bash $script.Path
+    } else {
+        & $script.Path @ScriptArgs   # hashtable splat binds switches by name
+    }
+}
+
+function Confirm-Destructive($ph) {
+    if (-not $ph.Destructive -or $Force) { return $true }
+    Write-Host "`nWARNING: '$($ph.Folder)' changes or deletes resources in the SOURCE subscription." -ForegroundColor Red
+    Write-Host "Make sure Phase 3 (Backup) is complete and verified." -ForegroundColor Red
+    return (Read-Host "Type YES to continue") -ceq "YES"
+}
+
+function Invoke-Phase($ph) {
+    $scripts = @(Get-PhaseScripts $ph)
+    Write-Host "`n>>> Phase $($ph.Id) - $($ph.Title)" -ForegroundColor Cyan
+
+    if ($ph.Mode -eq "All") {
+        $run = @($scripts | Where-Object { -not $_.Optional -and -not $_.Blocked })
+        Write-Host "Scripts in this phase:" -ForegroundColor Yellow
+        $scripts | ForEach-Object {
+            $note = if ($_.Blocked) { "  (skipped: needs a destination value in the params)" }
+                    elseif ($_.Optional) { "  (optional - pick it individually)" } else { "" }
+            Write-Host ("  {0}{1}" -f $_.Name, $note)
+        }
+        $answer = Read-Host "`nEnter = run all, a script number (e.g. 3) = run only that one, B = back"
+    } else {
+        Write-Host "These are alternatives - choose what applies:" -ForegroundColor Yellow
+        $scripts | ForEach-Object { Write-Host "  $($_.Name)" }
+        $run = @()
+        $answer = Read-Host "`nScript number to run, or B = back"
+    }
+
+    if ($answer -match '^[bB]$') { return }
+    if ($answer -match '^\d+$') {
+        $n = [int]$answer
+        $pick = $scripts | Where-Object { $_.Name -match "^0*$n-" } | Select-Object -First 1
+        if (-not $pick) { Write-Host "No script numbered $n in this phase." -ForegroundColor Red; return }
+        $run = @($pick)
+    }
+    if (-not $run) { return }
+    if (-not (Confirm-Destructive $ph)) { Write-Host "Cancelled." -ForegroundColor Yellow; return }
+
+    foreach ($s in $run) {
+        # Validation walks every resource group unless the user runs the script directly.
+        $scriptArgs = if ($s.Name -like "01-ValidateResourceGroupMove*") { @{ AllResourceGroups = $true } } else { @{} }
+        Invoke-MigrationScript $s $scriptArgs
+    }
+    Write-Host "`nPhase $($ph.Id) finished. Output is in $backupRootDir" -ForegroundColor Green
+}
+
+# ── Menu ──────────────────────────────────────────────────────────────────────
+function Format-Tag($status) {
+    switch ($status) {
+        "DONE"        { "[COMPLETED]  " }
+        "IN_PROGRESS" { "[IN PROGRESS]" }
+        Default       { "[PENDING]    " }
+    }
+}
+function Color-Tag($status) {
+    switch ($status) { "DONE" { "Green" } "IN_PROGRESS" { "Yellow" } Default { "Gray" } }
+}
+
+function Show-Menu($state) {
     Clear-Host
     Write-Host "=================================================================" -ForegroundColor Cyan
     Write-Host "         AZURE TENANT & SUBSCRIPTION MIGRATION ORCHESTRATOR      " -ForegroundColor Cyan
     Write-Host "=================================================================" -ForegroundColor Cyan
     Write-Host "Source Tenant ID      : $sourceTenantId" -ForegroundColor Yellow
-    Write-Host "Destination Tenant ID : $(if ($destinationTenantId) { $destinationTenantId } else { '(Same Tenant Move)' })" -ForegroundColor Yellow
+    Write-Host "Destination Tenant ID : $(if ($destinationTenantId) { $destinationTenantId } else { '(same tenant)' })" -ForegroundColor Yellow
     Write-Host "Source Subscription   : $sourceSubscriptionId" -ForegroundColor Yellow
-    Write-Host "Destination Sub       : $(if ($destinationSubscriptionId) { $destinationSubscriptionId } else { '(Not Set)' })" -ForegroundColor Yellow
+    Write-Host "Destination Sub       : $(if ($destinationSubscriptionId) { $destinationSubscriptionId } else { '(not set)' })" -ForegroundColor Yellow
     Write-Host "Data Directory        : $backupRootDir" -ForegroundColor Yellow
     Write-Host "-----------------------------------------------------------------" -ForegroundColor Gray
-
-    # Display Next Recommended Step
-    $nextLabel = switch ($state.Next) {
-        "P" { "[P] Planning Stage: Export Permissions & Identity Mapping" }
-        "0" { "[0] Pre-Flight: Blocker Discovery Scanner" }
-        "1" { "[1] Phase 1: Prepare Destination Subscription" }
-        "2" { "[2] Phase 2: Full Backup of Source Subscription" }
-        "3" { "[3] Phase 3: Pre-Migration Cleanup & Disassociations" }
-        "4" { "[4] Phase 4: Validate & Execute Migration" }
-        "5" { "[5] Phase 5: Recreate & Restore Destination Environment" }
-        Default { "Review Logs & Verification" }
+    foreach ($ph in $Phases) {
+        $s = $state.Status[$ph.Id]
+        Write-Host "  $(Format-Tag $s) [$($ph.Id)] $($ph.Title)" -ForegroundColor (Color-Tag $s)
     }
-    Write-Host ">>> NEXT RECOMMENDED STEP: $nextLabel" -ForegroundColor Green
-    Write-Host "-----------------------------------------------------------------" -ForegroundColor Gray
+    Write-Host "  ---------------------------------------------------------------" -ForegroundColor Gray
+    Write-Host "  [S] Setup tenant / subscription IDs   [G] Visual dashboard   [Q] Quit" -ForegroundColor Cyan
+    if ($null -ne $state.Next) {
+        Write-Host "`n>>> NEXT RECOMMENDED: Phase $($state.Next)" -ForegroundColor Green
+    } else {
+        Write-Host "`n>>> All phases complete. Review logs in $logRootDir" -ForegroundColor Green
+    }
 }
 
 function Open-Dashboard {
     $dashFile = Join-Path $PSScriptRoot "dashboard.html"
-    Write-Host "Opening Migration Dashboard in browser: $dashFile..." -ForegroundColor Cyan
-    if ($IsWindows -or ($env:OS -match "Windows")) {
-        Start-Process $dashFile
-    } elseif ($IsMacOS) {
-        Start-Process "open" -ArgumentList $dashFile
-    } else {
-        Start-Process "xdg-open" -ArgumentList $dashFile -ErrorAction SilentlyContinue
-    }
+    Write-Host "Opening $dashFile ..." -ForegroundColor Cyan
+    if ($IsMacOS)        { Start-Process "open" -ArgumentList $dashFile }
+    elseif ($IsLinux)    { Start-Process "xdg-open" -ArgumentList $dashFile -ErrorAction SilentlyContinue }
+    else                 { Start-Process $dashFile }
 }
 
-function Format-Tag($status) {
-    switch ($status) {
-        "DONE"        { return "[COMPLETED]  " }
-        "IN_PROGRESS" { return "[IN PROGRESS]" }
-        Default       { return "[PENDING]    " }
-    }
+# ── Entry point ───────────────────────────────────────────────────────────────
+if ($Setup) { Invoke-Setup; exit 0 }
+
+if ($Phase -ge 0) {
+    Invoke-Phase ($Phases | Where-Object Id -eq $Phase)
+    exit 0
 }
 
-function Color-Tag($status) {
-    switch ($status) {
-        "DONE"        { return "Green" }
-        "IN_PROGRESS" { return "Yellow" }
-        Default       { return "Gray" }
-    }
-}
-
-function Run-PhasePlanning {
-    Write-Host "`n>>> Running Phase 0: Planning & Permission Assessment..." -ForegroundColor Cyan
-    Write-Host "Select Planning Action:" -ForegroundColor Yellow
-    Write-Host "  [1] Export ALL Permissions (RBAC, Custom Roles, Key Vault, MIs, SQL)"
-    Write-Host "  [2] Generate Identity Mapping Plan (Template for target tenant)"
-    Write-Host "  [3] Resolve & Validate Target Tenant Identities (Entra ID lookup)"
-    Write-Host "  [4] Compare Compute Quotas (vCPU core limits vs destination)"
-    Write-Host "  [5] Run All Planning Steps"
-    $opt = Read-Host "Choice"
-    switch ($opt) {
-        "1" { & (Join-Path $PSScriptRoot "0-Planning/1-ExportAllPermissions.ps1") }
-        "2" { & (Join-Path $PSScriptRoot "0-Planning/2-GenerateIdentityMappingTemplate.ps1") }
-        "3" { & (Join-Path $PSScriptRoot "0-Planning/3-ResolveTargetIdentities.ps1") }
-        "4" { & (Join-Path $PSScriptRoot "0-Planning/4-CompareSubscriptionQuotas.ps1") }
-        "5" {
-            & (Join-Path $PSScriptRoot "0-Planning/1-ExportAllPermissions.ps1")
-            & (Join-Path $PSScriptRoot "0-Planning/2-GenerateIdentityMappingTemplate.ps1")
-            if ($destinationTenantId) {
-                & (Join-Path $PSScriptRoot "0-Planning/3-ResolveTargetIdentities.ps1")
-            }
-            if ($destinationSubscriptionId) {
-                & (Join-Path $PSScriptRoot "0-Planning/4-CompareSubscriptionQuotas.ps1")
-            }
-        }
-    }
-}
-
-function Run-PhaseBlockers {
-    Write-Host "`n>>> Running Pre-Flight Blocker Discovery..." -ForegroundColor Cyan
-    & (Join-Path $PSScriptRoot "1-InitialReview/2-CheckMigrationBlockers.ps1")
-    & (Join-Path $PSScriptRoot "1-InitialReview/1-CheckVMDiskEncryption.ps1")
-}
-
-function Run-Phase1 {
-    Write-Host "`n>>> Running Phase 1: Prepare Destination Subscription..." -ForegroundColor Cyan
-    & (Join-Path $PSScriptRoot "3-MigrationPrep/2-RegisterResources.ps1")
-    & (Join-Path $PSScriptRoot "3-MigrationPrep/3-ResourceGroups.ps1")
-}
-
-function Run-Phase2 {
-    Write-Host "`n>>> Running Phase 2: Full Backup of Source Subscription..." -ForegroundColor Cyan
-    & (Join-Path $PSScriptRoot "3-MigrationPrep/0-BackupAndRemoveResourceLocks.ps1")
-    & (Join-Path $PSScriptRoot "3-MigrationPrep/4-BackupCustomRoles.ps1")
-    & (Join-Path $PSScriptRoot "3-MigrationPrep/4-ListRoleAssignmentsv2.ps1")
-    & (Join-Path $PSScriptRoot "3-MigrationPrep/11-BackupIdentities.ps1")
-    & (Join-Path $PSScriptRoot "3-MigrationPrep/5-BackupPublicIPs.ps1")
-    & (Join-Path $PSScriptRoot "3-MigrationPrep/6-BackupActionGroups.ps1")
-    & (Join-Path $PSScriptRoot "3-MigrationPrep/9-BackupDiagSettings.ps1")
-    & (Join-Path $PSScriptRoot "3-MigrationPrep/13-BackupVMBackupSettings.ps1")
-    & (Join-Path $PSScriptRoot "3-MigrationPrep/16-BackupAppGateways.ps1")
-    & (Join-Path $PSScriptRoot "5-VNETPeerings/1.Export-VNETs.ps1")
-    if (Get-Command "bash" -ErrorAction SilentlyContinue) {
-        bash (Join-Path $PSScriptRoot "3-MigrationPrep/10-BackupPrivateEndpoints.azcli")
-        bash (Join-Path $PSScriptRoot "3-MigrationPrep/12-BackupAccessPolicies.azcli")
-        bash (Join-Path $PSScriptRoot "3-MigrationPrep/14-BackupSABackupSettings.azcli")
-        bash (Join-Path $PSScriptRoot "3-MigrationPrep/15-BackupNATsettings.azcli")
-        bash (Join-Path $PSScriptRoot "3-MigrationPrep/7-ExportSSHKeys.azcli")
-        bash (Join-Path $PSScriptRoot "3-MigrationPrep/8-BackupMetricAlerts.azcli")
-    }
-    Write-Host "`n✅ Phase 2 Backup Complete! Data stored in $backupRootDir" -ForegroundColor Green
-}
-
-function Run-Phase3 {
-    Write-Host "`n>>> Running Phase 3: Pre-Migration Deletions & Disassociations..." -ForegroundColor Cyan
-    Write-Host "WARNING: This will disable backups, identities, and disconnect peerings." -ForegroundColor Red
-    $conf = Read-Host "Type YES to proceed with Phase 3"
-    if ($conf -ne "YES") { return }
-
-    & (Join-Path $PSScriptRoot "4-Deletions/5-DisableBackups.ps1")
-    & (Join-Path $PSScriptRoot "4-Deletions/4-DisableMIdentities.ps1")
-    & (Join-Path $PSScriptRoot "4-Deletions/7-UnbindAppServiceCertificates.ps1")
-    & (Join-Path $PSScriptRoot "5-VNETPeerings/2.DeleteVNETs.ps1")
-    if (Get-Command "bash" -ErrorAction SilentlyContinue) {
-        bash (Join-Path $PSScriptRoot "4-Deletions/1-PublicIPdiss.azcli")
-        bash (Join-Path $PSScriptRoot "4-Deletions/3-PrivateEndpoints.azcli")
-        bash (Join-Path $PSScriptRoot "4-Deletions/6-DisableSABackups.azcli")
-    }
-    Write-Host "`n✅ Phase 3 Cleanup Complete! Resources are now in a moveable state." -ForegroundColor Green
-}
-
-function Run-Phase4 {
-    Write-Host "`n>>> Running Phase 4: Migration Execution..." -ForegroundColor Cyan
-    Write-Host "Select Migration Method:" -ForegroundColor Yellow
-    Write-Host "  [1] Validate Resource Group Move (Same Tenant Sub-to-Sub)"
-    Write-Host "  [2] Move Resource Group (Same Tenant Sub-to-Sub)"
-    Write-Host "  [3] Transfer Entire Subscription to New Tenant Directory"
-    $m = Read-Host "Choice"
-    switch ($m) {
-        "1" { & (Join-Path $PSScriptRoot "6-MIGRATION/1-ValidateRGMove.ps1") -AllResourceGroups }
-        "2" { & (Join-Path $PSScriptRoot "6-MIGRATION/2-MigrateRG.ps1") }
-        "3" { & (Join-Path $PSScriptRoot "6-MIGRATION/4-TransferSubscriptionDirectory.ps1") }
-    }
-}
-
-function Run-Phase5 {
-    Write-Host "`n>>> Running Phase 5: Recreate & Restore Destination Environment..." -ForegroundColor Cyan
-    & (Join-Path $PSScriptRoot "5-VNETPeerings/3.RecreatePeerings.ps1")
-    & (Join-Path $PSScriptRoot "7-Recreation/5-RestoreCustomRoles.ps1")
-    & (Join-Path $PSScriptRoot "7-Recreation/4-A-RecreateMIdentities.ps1")
-    & (Join-Path $PSScriptRoot "7-Recreation/4-B-RestoreKeyVaultAccess.ps1")
-    & (Join-Path $PSScriptRoot "7-Recreation/5-RestoreRoleAssignments.ps1")
-    & (Join-Path $PSScriptRoot "7-Recreation/7-RestoreActionGroups.ps1")
-    & (Join-Path $PSScriptRoot "7-Recreation/8-VMBackups.ps1")
-    & (Join-Path $PSScriptRoot "7-Recreation/10-RestoreDiagSettings.ps1")
-    & (Join-Path $PSScriptRoot "7-Recreation/11-RestoreAppGateways.ps1")
-    & (Join-Path $PSScriptRoot "7-Recreation/0-RestoreResourceLocks.ps1")
-    if (Get-Command "bash" -ErrorAction SilentlyContinue) {
-        bash (Join-Path $PSScriptRoot "7-Recreation/1-PublicIPass.azcli")
-        bash (Join-Path $PSScriptRoot "7-Recreation/2-KeyVault.azcli")
-        bash (Join-Path $PSScriptRoot "7-Recreation/3-PrivateEndpoints.azcli")
-        bash (Join-Path $PSScriptRoot "7-Recreation/6-NATGateway.azcli")
-        bash (Join-Path $PSScriptRoot "7-Recreation/7-RestoreSSHKeys.sh")
-        bash (Join-Path $PSScriptRoot "7-Recreation/9-SABackups.azcli")
-        bash (Join-Path $PSScriptRoot "7-Recreation/MetricAlerts.azcli")
-    }
-    Write-Host "`n✅ Phase 5 Restoration Complete!" -ForegroundColor Green
+Test-Prerequisites
+if ((Test-IsPlaceholder $sourceTenantId) -or (Test-IsPlaceholder $sourceSubscriptionId)) {
+    Write-Host "`nSource tenant/subscription are not configured yet." -ForegroundColor Yellow
+    if ((Read-Host "Run first-time setup now? (Y/n)") -notmatch '^[nN]') { Invoke-Setup }
 }
 
 while ($true) {
-    $st = Get-PhaseState
-    Show-Header -state $st
+    $state = Get-PhaseState
+    Show-Menu $state
+    $choice = Read-Host "`nSelect an option (Enter = recommended)"
+    if ([string]::IsNullOrWhiteSpace($choice)) { $choice = "$($state.Next)" }
 
-    Write-Host "MIGRATION PHASES (State-Aware):" -ForegroundColor White
-    Write-Host "  $(Format-Tag $st.PhaseP) [P] Planning Stage: Export Permissions & Identity Mapping" -ForegroundColor $(Color-Tag $st.PhaseP)
-    Write-Host "  $(Format-Tag $st.Phase0) [0] Pre-Flight: Blocker Discovery & Disk Encryption Scanner" -ForegroundColor $(Color-Tag $st.Phase0)
-    Write-Host "  $(Format-Tag $st.Phase1) [1] Phase 1 - Prepare Destination Subscription" -ForegroundColor $(Color-Tag $st.Phase1)
-    Write-Host "  $(Format-Tag $st.Phase2) [2] Phase 2 - Back Up Everything (Source Subscription)" -ForegroundColor $(Color-Tag $st.Phase2)
-    Write-Host "  $(Format-Tag $st.Phase3) [3] Phase 3 - Pre-Migration Cleanup (Disassociations & Deletions)" -ForegroundColor $(Color-Tag $st.Phase3)
-    Write-Host "  $(Format-Tag $st.Phase4) [4] Phase 4 - Validate & Execute Migration" -ForegroundColor $(Color-Tag $st.Phase4)
-    Write-Host "  $(Format-Tag $st.Phase5) [5] Phase 5 - Recreate & Restore (Destination Subscription)" -ForegroundColor $(Color-Tag $st.Phase5)
-    Write-Host "  ---------------------------------------------------------------" -ForegroundColor Gray
-    Write-Host "  [G] Open Visual Web Dashboard (GUI in browser)" -ForegroundColor Cyan
-    Write-Host "  [Q] Quit"
-    Write-Host ""
-    $choice = Read-Host "Select an option (Press Enter for recommended: $($st.Next))"
-
-    if ([string]::IsNullOrWhiteSpace($choice)) {
-        $choice = $st.Next
-    }
-
-    switch ($choice.ToUpper()) {
-        "P" { Run-PhasePlanning; Pause }
-        "0" { Run-PhaseBlockers; Pause }
-        "1" { Run-Phase1; Pause }
-        "2" { Run-Phase2; Pause }
-        "3" { Run-Phase3; Pause }
-        "4" { Run-Phase4; Pause }
-        "5" { Run-Phase5; Pause }
-        "G" { Open-Dashboard; Pause }
-        "Q" { Write-Host "Exiting."; exit 0 }
-        Default { Write-Host "Invalid option." -ForegroundColor Red; Start-Sleep -Seconds 1 }
+    switch -Regex ($choice.ToUpper()) {
+        '^[0-6]$' { Invoke-Phase ($Phases | Where-Object Id -eq ([int]$choice)); Read-Host "`nPress Enter to continue" | Out-Null }
+        '^S$'     { Invoke-Setup; Start-Sleep 1 }
+        '^G$'     { Open-Dashboard; Start-Sleep 1 }
+        '^Q$'     { Write-Host "Exiting."; exit 0 }
+        Default   { Write-Host "Invalid option." -ForegroundColor Red; Start-Sleep 1 }
     }
 }

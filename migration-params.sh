@@ -1,7 +1,9 @@
 #!/bin/bash
 ## MIGRATION PARAMETERS FILE (bash)
 ## ─────────────────────────────────────────────────────────────────────────────
-## Update the parameters below for each migration project.
+## Update the parameters below for each migration project, or (recommended) put
+## your values in an untracked 'migration-params.local.sh' so real tenant and
+## subscription IDs never get committed.
 ## All bash/azcli scripts in this repo source this file automatically.
 ## ─────────────────────────────────────────────────────────────────────────────
 
@@ -12,6 +14,12 @@ DESTINATION_TENANT_ID=""    # Set if migrating to a different Microsoft Entra ID
 # ── Subscription Configuration ────────────────────────────────────────────────
 SOURCE_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
 DESTINATION_SUBSCRIPTION_ID=""
+
+# ── Local overrides (untracked) ───────────────────────────────────────────────
+# Real IDs belong in migration-params.local.sh, which .gitignore excludes.
+_PARAMS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=/dev/null
+[[ -f "${_PARAMS_DIR}/migration-params.local.sh" ]] && source "${_PARAMS_DIR}/migration-params.local.sh"
 
 # ── Storage & Output Paths ────────────────────────────────────────────────────
 # Centralized directory for all backups, JSON/CSV state files, and execution logs.

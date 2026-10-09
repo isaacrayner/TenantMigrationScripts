@@ -1,0 +1,33 @@
+#!/bin/bash
+## DESCRIPTION: Exports SSH public keys from all resource groups in the source subscription
+##              to JSON backup files in migration-data/SSHKeys/.
+## USAGE:       Run in bash/WSL with Azure CLI and jq installed and authenticated.
+##              Restore in destination using 06-Restore/12-RestoreSshKeys.sh.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/../migration-params.sh"
+
+SSH_BACKUP_DIR="${BACKUP_ROOT_DIR}/SSHKeys"
+mkdir -p "$SSH_BACKUP_DIR"
+
+echo "=== Backing up Azure SSH Public Keys ==="
+echo "Source Subscription: $SOURCE_SUBSCRIPTION_ID"
+
+az account set --subscription "$SOURCE_SUBSCRIPTION_ID"
+
+ALL_KEYS=$(az sshkey list --subscription "$SOURCE_SUBSCRIPTION_ID" -o json)
+KEY_COUNT=$(echo "$ALL_KEYS" | jq length)
+
+if [[ "$KEY_COUNT" -eq 0 ]]; then
+    echo "No SSH keys found in subscription $SOURCE_SUBSCRIPTION_ID."
+    echo "[]" > "${SSH_BACKUP_DIR}/ssh_keys.json"
+    exit 0
+fi
+
+echo "Found $KEY_COUNT SSH key(s). Saving to ${SSH_BACKUP_DIR}/ssh_keys.json..."
+echo "$ALL_KEYS" > "${SSH_BACKUP_DIR}/ssh_keys.json"
+
+echo "✅ SSH Keys backed up successfully."
+echo "Restore in destination via 06-Restore/12-RestoreSshKeys.sh."

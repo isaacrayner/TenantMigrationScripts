@@ -1,0 +1,18 @@
+# Migration output: backups, exports, state files and logs contain tenant data
+migration-data/
+*.log
+
+# Real tenant / subscription IDs live here, never in the tracked template
+migration-params.local.ps1
+migration-params.local.sh
+
+# Typical export artifacts
+roleassignments.*
+customrolename.json
+*.pem
+*.pfx
+*.key
+.env
+
+# Pester output
+testResults.xml

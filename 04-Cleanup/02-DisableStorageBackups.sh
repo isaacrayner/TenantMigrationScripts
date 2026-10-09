@@ -1,0 +1,51 @@
+#!/bin/bash
+## DESCRIPTION: Stops Azure File Share backup protection (retaining all recovery points) for
+##              all file shares listed in the backup CSV.
+## USAGE:       Run in bash/WSL after running 03-Backup/13-BackupStorageBackupSettings.sh.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/../migration-params.sh"
+
+INPUT_FILE="${BACKUP_ROOT_DIR}/BackupSettings/storage-backup.csv"
+
+if [[ ! -f "$INPUT_FILE" ]]; then
+    echo "Backup file not found at $INPUT_FILE. Skipping."
+    exit 0
+fi
+
+echo "=== Disabling Azure File Share Backups (Retaining Recovery Points) ==="
+echo "Source Subscription: $SOURCE_SUBSCRIPTION_ID"
+
+az account set --subscription "$SOURCE_SUBSCRIPTION_ID"
+
+tail -n +2 "$INPUT_FILE" | while IFS=',' read -r STORAGE_ACCOUNT FILE_SHARE FRIENDLY_NAME RESOURCE_ID RESOURCE_GROUP VAULT POLICY_NAME POLICY_ID; do
+    [[ -z "$STORAGE_ACCOUNT" ]] && continue
+    echo "Checking backup for File Share: $FRIENDLY_NAME in Storage Account: $STORAGE_ACCOUNT..."
+
+    BACKUP_ITEM=$(az backup item list --vault-name "$VAULT" --resource-group "$RESOURCE_GROUP" \
+        --query "[?properties.friendlyName=='$FRIENDLY_NAME' && properties.workloadType=='AzureFileShare']" -o json 2>/dev/null || true)
+
+    if [[ -z "$BACKUP_ITEM" || "$BACKUP_ITEM" == "[]" ]]; then
+        echo "  ⚠️ Backup item not found for $FRIENDLY_NAME. Skipping."
+        continue
+    fi
+
+    BACKUP_ITEM_NAME=$(echo "$BACKUP_ITEM" | jq -r '.[0].name')
+    CONTAINER_NAME=$(echo "$BACKUP_ITEM" | jq -r '.[0].properties.containerName')
+
+    echo "  Stopping backup for: $FRIENDLY_NAME..."
+    az backup protection disable \
+        --vault-name "$VAULT" \
+        --resource-group "$RESOURCE_GROUP" \
+        --item-name "$BACKUP_ITEM_NAME" \
+        --container-name "$CONTAINER_NAME" \
+        --retain-recovery-points true \
+        --yes \
+        --only-show-errors
+
+    echo "  ✅ Backup stopped (recovery points retained)."
+done
+
+echo "Azure File Share backup stopping process complete."
