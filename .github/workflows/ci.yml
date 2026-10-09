@@ -12,12 +12,17 @@ jobs:
       - name: Checkout Repo
         uses: actions/checkout@v4
 
+      - name: Generate ASCII
+        run: cowsay -f dragon "If youre here, Im guessing youre as lazy as me" >> dragon.txt
+
       - name: Install test tooling
         shell: pwsh
         run: Install-Module Pester, PSScriptAnalyzer -Scope CurrentUser -Force -SkipPublisherCheck
 
       - name: Repository checks and Pester suite
-        run: tests/run-tests.sh
+        run: |
+          echo "Run the tests"
+          tests/run-tests.sh
 
       - name: ShellCheck (errors only)
         run: git ls-files '*.sh' | xargs shellcheck --severity=error
